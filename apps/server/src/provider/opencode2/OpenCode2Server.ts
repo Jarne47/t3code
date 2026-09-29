@@ -81,25 +81,27 @@ const httpFailureOf = (cause: unknown): HttpClientError.HttpClientError | undefi
  * password (1.x sends it empty), and any other failed status is a server error.
  * A 2xx the client cannot decode is not OpenCode 2 (1.x answers with HTML).
  */
-const describeInfoFailure = (cause: unknown, url: string) => {
+const describeInfoFailure = (cause: unknown) => {
   const failure = httpFailureOf(cause);
   if (failure?.reason._tag === "TransportError") {
-    return `Could not reach the OpenCode server at ${url}.`;
+    return "Could not reach the OpenCode server.";
   }
   const status = failure?.response?.status;
-  if (status === 401) return `The OpenCode server at ${url} rejected the server password.`;
+  if (status === 401) return "The OpenCode server rejected the server password.";
   if (status !== undefined && (status < 200 || status >= 300)) {
-    return `The OpenCode server at ${url} returned HTTP ${status}.`;
+    return `The OpenCode server returned HTTP ${status}.`;
   }
-  return `The server at ${url} is not an OpenCode 2 server.`;
+  return "The server is not an OpenCode 2 server.";
 };
 
 /**
  * Confirms a server is an authenticated OpenCode 2 server through `/api/info`
  * and returns its version. `/health` and friends answer 200 with the web UI's
- * HTML on every version, so only this endpoint proves readiness.
+ * HTML on every version, so only this endpoint proves readiness. Details are
+ * fixed text because they reach clients and a `serverUrl` can carry
+ * credentials; the underlying failure stays in `cause`.
  */
-export const verifyServer = (client: OpenCodeClient, url: string) =>
+export const verifyServer = (client: OpenCodeClient) =>
   client.server.info().pipe(
     Effect.timeoutOrElse({
       duration: INFO_TIMEOUT,
@@ -107,7 +109,7 @@ export const verifyServer = (client: OpenCodeClient, url: string) =>
         Effect.fail(
           new OpenCodeRuntimeError({
             operation: "server.info",
-            detail: `Timed out waiting for the OpenCode server at ${url}.`,
+            detail: "Timed out waiting for the OpenCode server.",
           }),
         ),
     }),
@@ -116,7 +118,7 @@ export const verifyServer = (client: OpenCodeClient, url: string) =>
         Effect.fail(
           new OpenCodeRuntimeError({
             operation: "server.info",
-            detail: `The OpenCode server at ${url} rejected the server password.`,
+            detail: "The OpenCode server rejected the server password.",
             cause,
           }),
         ),
@@ -126,7 +128,7 @@ export const verifyServer = (client: OpenCodeClient, url: string) =>
         ? cause
         : new OpenCodeRuntimeError({
             operation: "server.info",
-            detail: describeInfoFailure(cause, url),
+            detail: describeInfoFailure(cause),
             cause,
           }),
     ),
@@ -151,7 +153,7 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
   const connectTo = (url: string, password: Redacted.Redacted, external: boolean) =>
     Effect.gen(function* () {
       const client = yield* opencode.connect({ baseUrl: url, password });
-      const version = yield* verifyServer(client, url);
+      const version = yield* verifyServer(client);
       return { url, client, version, external } satisfies OpenCode2Connection;
     });
   let latest: OpenCode2Connection | undefined;
@@ -187,7 +189,7 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
         // The owner verifies every server it starts before lending it out.
         latest?.url === server.url
           ? use(latest)
-          : Effect.die(new Error(`OpenCode 2 server ${server.url} was lent before verification.`)),
+          : Effect.die(new Error("OpenCode 2 server was lent before verification.")),
       ),
   });
 });

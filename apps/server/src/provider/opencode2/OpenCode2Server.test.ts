@@ -6,10 +6,12 @@ import {
   HostProcessPlatform,
 } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { describe } from "vite-plus/test";
 
@@ -49,7 +51,7 @@ const verify = (httpClient: Layer.Layer<HttpClient.HttpClient>, url = "http://12
   Effect.gen(function* () {
     const opencode = yield* OpenCode2Client.OpenCode2Client;
     const client = yield* opencode.connect({ baseUrl: url, password: "secret" });
-    return yield* OpenCode2Server.verifyServer(client, url);
+    return yield* OpenCode2Server.verifyServer(client);
   }).pipe(Effect.provide(OpenCode2Client.layer.pipe(Layer.provide(httpClient))));
 
 describe("OpenCode2Server.verifyServer", () => {
@@ -105,6 +107,61 @@ describe("OpenCode2Server.verifyServer", () => {
       const error = yield* verify(FetchHttpClient.layer, "http://127.0.0.1:1").pipe(Effect.flip);
       assert.include(error.detail, "Could not reach the OpenCode server");
     }),
+  );
+});
+
+describe("OpenCode2Server error details", () => {
+  // `detail` reaches clients through the provider status message, and a
+  // `serverUrl` can carry credentials in its userinfo or query.
+  const serverUrl = "http://user:url-secret@127.0.0.1:1/?token=query-secret";
+  const detailFor = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
+    Effect.gen(function* () {
+      const server = yield* OpenCode2Server.make({
+        binaryPath: "opencode",
+        serverUrl,
+        serverPassword: "secret",
+        directory: "/project",
+        environment: {},
+      });
+      const error = yield* server.withConnection(() => Effect.void).pipe(Effect.flip);
+      return error.detail;
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          OpenCode2Client.layer.pipe(Layer.provide(httpClient)),
+          OpenCodeRuntimeLive.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    );
+
+  it.effect("never include the server URL", () =>
+    Effect.gen(function* () {
+      const hanging = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.never),
+      );
+      const timedOut = yield* detailFor(hanging).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      const details = [
+        yield* detailFor(FetchHttpClient.layer),
+        yield* detailFor(serverReplying({ status: 401, body: "" })),
+        yield* detailFor(serverReplying({ status: 502, contentType: "text/plain", body: "" })),
+        yield* detailFor(serverReplying({ status: 200, contentType: "text/html", body: SPA_BODY })),
+        yield* Fiber.join(timedOut),
+      ];
+      assert.deepStrictEqual(details, [
+        "Could not reach the OpenCode server.",
+        "The OpenCode server rejected the server password.",
+        "The OpenCode server returned HTTP 502.",
+        "The server is not an OpenCode 2 server.",
+        "Timed out waiting for the OpenCode server.",
+      ]);
+      for (const detail of details) {
+        assert.notInclude(detail, "url-secret");
+        assert.notInclude(detail, "query-secret");
+        assert.notInclude(detail, "127.0.0.1");
+      }
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 });
 
