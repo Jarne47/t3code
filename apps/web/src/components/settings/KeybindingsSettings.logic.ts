@@ -16,7 +16,14 @@ import { isMacPlatform } from "../../lib/utils";
 import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
 
 const usageCommandOrder = new Map<KeybindingCommand, number>(
-  [...METRIC_OPTIONS, ...WINDOW_OPTIONS].map((option, index) => [option.command, index]),
+  // Include Open in the same ordering as the metrics; mixing numeric and label
+  // comparison inside Usage made the result depend on unrelated shortcuts.
+  [
+    METRIC_OPTIONS[0]!.command,
+    "usage.open" as const,
+    ...METRIC_OPTIONS.slice(1).map((option) => option.command),
+    ...WINDOW_OPTIONS.map((option) => option.command),
+  ].map((command, index) => [command, index]),
 );
 
 function compareUsageCommands(left: KeybindingCommand, right: KeybindingCommand): number | null {

@@ -103,8 +103,8 @@ export function createSidebarSortingStrategy(input: {
   snoozedThreadCount?: number;
   cardHeight?: number;
   slimHeight?: number;
-  /** Space each pinned boundary opens for its label while dragging. The
-   * markers stay zero height at rest, so nothing is reserved until pickup. */
+  /** Measured height reserved for each pinned boundary during a drag,
+   * including boundaries whose section labels are already visible at rest. */
   boundaryLabelHeight?: number;
 }): SortingStrategy {
   const { items } = input;

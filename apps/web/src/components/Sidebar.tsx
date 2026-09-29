@@ -1,3 +1,5 @@
+import { SidebarSortMenu } from "./sidebar/SidebarSortMenu";
+import { activeThreadProjectGroup, sortActiveSidebarThreads } from "./sidebar/activeThreadSort";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
@@ -185,7 +187,6 @@ import {
   sidebarMarkerId,
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
-  sortThreadsForSidebar,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
@@ -598,23 +599,24 @@ function SidebarSectionPlaceholder(props: {
   );
 }
 
-// Zero-height markers reserve no label space at rest. During a drag the
-// sorting strategy opens 24px for a 16px label with 4px clearance on each side.
+// Boundaries label pinned and active threads at rest; empty pins only open during a drag.
+// The sorting strategy uses the same 24px label height while dragging.
 const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
 
 function SidebarDragBoundary(props: {
   marker: "pinned-header" | "pinned-divider";
   label: string;
   visible: boolean;
+  persistent: boolean;
   isDropTarget: boolean;
 }) {
   return (
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className="pointer-events-none relative mx-0.5 -mb-px h-0"
+      className={cn("pointer-events-none relative mx-0.5 -mb-px", props.persistent ? "h-6" : "h-0")}
     >
-      {props.visible ? (
+      {props.visible || props.persistent ? (
         <div className="sidebar-drag-boundary-label absolute inset-x-2 top-1 flex h-4 items-center gap-2">
           <span
             className={cn(
@@ -1399,10 +1401,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     ],
   );
 
-  // All sidebar rows share one surface model. Live threads used to look
-  // like elevated cards while settled threads were plain rows, leaving neither
-  // a useful hierarchy nor a reliable hover cue. Status now lives in the row
-  // content; surface is reserved for interaction (hover, multi-select, route).
+  // Pinned threads have a quiet accent tint. Route, selection and draft surfaces
+  // still take priority so status and focus remain legible in every theme.
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" && "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
@@ -1412,9 +1412,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         ? "bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
           ? cn(draftSurfaceClassName, "text-sidebar-foreground")
-          : shouldRecede
-            ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+          : props.isPinned && variantAction === "settle"
+            ? "bg-primary/8 text-sidebar-foreground ring-1 ring-inset ring-primary/15 hover:bg-primary/15"
+            : shouldRecede
+              ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+              : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
     // Background work fades as a whole row, status label included, so it
     // takes less attention than rows that need a human (input, approval).
     shouldRecede &&
@@ -2182,6 +2184,7 @@ export default function Sidebar() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const activeSortOrder = useClientSettings((s) => s.sidebarActiveSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2376,6 +2379,22 @@ export default function Sidebar() {
         projectGroups.flatMap((group) =>
           group.memberProjects.map(
             (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
+          ),
+        ),
+      ),
+    [projectGroups],
+  );
+
+  const activeProjectGroups = useMemo(
+    () =>
+      new Map(
+        projectGroups.flatMap((group) =>
+          group.memberProjects.map(
+            (project) =>
+              [
+                `${project.environmentId}:${project.id}`,
+                { key: group.projectKey, label: group.displayName },
+              ] as const,
           ),
         ),
       ),
@@ -2631,7 +2650,7 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active);
+    const sortedActive = sortActiveSidebarThreads(active, activeSortOrder, activeProjectGroups);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2660,7 +2679,16 @@ export default function Sidebar() {
       settledThreads: sortSettledThreads(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    nowMinute,
+    optimisticDrop,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threads,
+    activeSortOrder,
+    activeProjectGroups,
+  ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -4599,6 +4627,7 @@ export default function Sidebar() {
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            <SidebarSortMenu disabled={optimisticDrop !== null || dragState !== null} />
           </SidebarGroup>
         }
       >
@@ -4824,6 +4853,7 @@ export default function Sidebar() {
                             key={threadKey}
                             id={threadKey}
                             disabled={
+                              activeSortOrder !== "manual" ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
                               optimisticDrop !== null
@@ -4844,9 +4874,30 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                         />,
                       ];
+                      let previousActiveProject: string | null = null;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          const thread = threadByKey.get(item.key)!;
+                          if (
+                            item.section === "active" &&
+                            activeSortOrder === "project" &&
+                            scopedProjectKeys === null
+                          ) {
+                            const group = activeThreadProjectGroup(thread, activeProjectGroups);
+                            if (group.key !== previousActiveProject) {
+                              items.push(
+                                <li
+                                  key={`project:${group.key}`}
+                                  className="mt-3 mb-1 flex list-none items-center gap-2 border-t border-sidebar-border/50 px-2 pt-2 text-xs font-medium text-sidebar-muted-foreground"
+                                >
+                                  <FolderIcon aria-hidden className="size-3.5 shrink-0" />
+                                  <span className="truncate">{group.label}</span>
+                                </li>,
+                              );
+                              previousActiveProject = group.key;
+                            }
+                          }
+                          items.push(renderThreadRow(thread, item.section));
                           continue;
                         }
                         switch (item.marker) {
@@ -4856,6 +4907,7 @@ export default function Sidebar() {
                                 key="pinned-header"
                                 marker="pinned-header"
                                 label="Pinned"
+                                persistent={pinnedThreads.length > 0}
                                 visible={from !== null}
                                 isDropTarget={dragTargetSection === "pinned"}
                               />,
@@ -4867,6 +4919,7 @@ export default function Sidebar() {
                                 key="pinned-divider"
                                 marker="pinned-divider"
                                 label="Active"
+                                persistent={pinnedThreads.length > 0}
                                 visible={from !== null}
                                 isDropTarget={dragTargetSection === "active"}
                               />,

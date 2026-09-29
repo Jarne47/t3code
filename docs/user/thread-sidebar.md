@@ -25,6 +25,14 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Choose the sidebar layout and order
+
+On web and desktop, use Mod+Shift+B to switch between the project tree and the new sidebar. The same action is available in the command palette as Switch to legacy sidebar or Switch to new sidebar.
+
+In the new sidebar, use the sort menu to choose manual order, last user message, creation time, or project name. Project sorting keeps all projects visible, groups their active threads, and shows the most recent user messages first within each project. Pinned threads stay above active work in their saved order. These view choices are local to the client; the native mobile app keeps its existing ordering.
+
+Choose Manual order to drag threads again. Switching views preserves your saved manual positions.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

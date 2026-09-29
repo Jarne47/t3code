@@ -1448,3 +1448,26 @@ describe("Usage shortcuts", () => {
     );
   });
 });
+
+describe("sidebar layout shortcut", () => {
+  it("switches layouts on Mac and Windows without taking terminal or preview shortcuts", () => {
+    for (const platform of ["MacIntel", "Win32"]) {
+      const keyEvent = event({
+        key: "B",
+        shiftKey: true,
+        metaKey: platform === "MacIntel",
+        ctrlKey: platform === "Win32",
+      });
+      assert.equal(
+        resolveShortcutCommand(keyEvent, DEFAULT_RESOLVED_KEYBINDINGS, { platform }),
+        "sidebar.toggleLayout",
+      );
+      for (const context of [{ terminalFocus: true }, { previewFocus: true }]) {
+        assert.notEqual(
+          resolveShortcutCommand(keyEvent, DEFAULT_RESOLVED_KEYBINDINGS, { platform, context }),
+          "sidebar.toggleLayout",
+        );
+      }
+    }
+  });
+});

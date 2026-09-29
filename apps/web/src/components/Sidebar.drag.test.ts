@@ -32,6 +32,7 @@ function layout(
   over: string,
   scale = 1,
   cardHeight = 82,
+  boundaryHeight = 0,
 ) {
   let top = 100;
   const rects = items.map((item) => {
@@ -39,7 +40,7 @@ function layout(
       item.kind === "thread"
         ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
         : item.marker === "pinned-header" || item.marker === "pinned-divider"
-          ? 0
+          ? boundaryHeight * scale
           : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
     const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
     top += height + 1;
@@ -392,6 +393,33 @@ describe("sidebar drag projection", () => {
       expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(0);
     },
   );
+
+  it("does not add another gap when pinned labels are already visible at rest", () => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      thread("q", "pinned"),
+      divider,
+      thread("a", "active"),
+      settledHeader,
+    ];
+    const strategy = createSidebarSortingStrategy({
+      items,
+      settledOrder: [],
+      settledExpanded: false,
+      boundaryLabelHeight: 24,
+    });
+    const args = layout(items, "p", "p", 1, 82, 24);
+    for (const key of [
+      sidebarMarkerId("pinned-header"),
+      "q",
+      sidebarMarkerId("pinned-divider"),
+      "a",
+    ]) {
+      const index = items.findIndex((item) => sidebarListItemId(item) === key);
+      expect(strategy({ ...args, index })?.y).toBe(0);
+    }
+  });
 
   it("opens label space below each pinned boundary while dragging", () => {
     const items = [

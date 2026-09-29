@@ -1,3 +1,5 @@
+import { Columns2Icon } from "lucide-react";
+import { Button } from "./ui/button";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -25,7 +27,11 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
+import {
+  useEnvironmentIdentificationMode,
+  useLegacySidebarEnabled,
+  useUpdateClientSettings,
+} from "../hooks/useSettings";
 import {
   PanelAnimationSuppressionProvider,
   usePanelAnimationSettings,
@@ -82,6 +88,10 @@ function SidebarControl() {
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar } = useSidebar();
+  const legacySidebarEnabled = useLegacySidebarEnabled();
+  const updateClientSettings = useUpdateClientSettings();
+  const layoutLabel = legacySidebarEnabled ? "Switch to new sidebar" : "Switch to legacy sidebar";
+  const layoutShortcut = shortcutLabelForCommand(keybindings, "sidebar.toggleLayout");
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
@@ -109,21 +119,28 @@ function SidebarControl() {
         // available everywhere else, including the plain-text composer.
         return;
       }
-      if (
-        resolveShortcutCommand(event, keybindings, { context: { usagePageOpen } }) !==
-        "sidebar.toggle"
-      )
-        return;
-
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          usagePageOpen,
+          terminalFocus: isTerminalFocused(),
+          previewFocus: isPreviewFocused(),
+        },
+      });
+      if (command !== "sidebar.toggle" && command !== "sidebar.toggleLayout") return;
       event.preventDefault();
       event.stopPropagation();
-      toggleSidebar();
+      if (event.repeat) return;
+      if (command === "sidebar.toggleLayout") {
+        void updateClientSettings({ legacySidebarEnabled: !legacySidebarEnabled });
+      } else {
+        toggleSidebar();
+      }
     };
 
     // Capture before focused editors consume commands such as Mod+B for rich-text formatting.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [keybindings, toggleSidebar, usagePageOpen]);
+  }, [keybindings, toggleSidebar, usagePageOpen, legacySidebarEnabled, updateClientSettings]);
 
   return (
     // The right-side layout controls carry mr-px (border compensation inside
@@ -150,6 +167,27 @@ function SidebarControl() {
         />
         <TooltipPopup side="bottom">
           Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="pointer-events-auto [-webkit-app-region:no-drag]"
+              aria-label={layoutLabel}
+              onClick={() =>
+                void updateClientSettings({ legacySidebarEnabled: !legacySidebarEnabled })
+              }
+            >
+              <Columns2Icon className="size-4" />
+            </Button>
+          }
+        />
+        <TooltipPopup side="bottom">
+          {layoutLabel}
+          {layoutShortcut ? ` (${layoutShortcut})` : ""}
         </TooltipPopup>
       </Tooltip>
     </div>
@@ -248,6 +286,9 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   });
   const sidebarProviderStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
+    // Reserve both titlebar buttons before the sidebar brand.
+    "--workspace-titlebar-content-left":
+      "calc(var(--workspace-controls-left) + 2 * var(--workspace-titlebar-control-size) + var(--workspace-titlebar-control-gap))",
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...(isMacosDesktop && !isWindowFullscreen
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }

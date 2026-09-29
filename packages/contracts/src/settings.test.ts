@@ -572,6 +572,19 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
+  it("keeps the active sort preference separate from legacy sorting and validates patches", () => {
+    expect(decodeClientSettings({}).sidebarActiveSortOrder).toBe("manual");
+    for (const mode of ["manual", "updated_at", "created_at", "project"] as const) {
+      expect(
+        decodeClientSettingsPatch({ sidebarActiveSortOrder: mode }).sidebarActiveSortOrder,
+      ).toBe(mode);
+      expect(decodeClientSettings({ sidebarActiveSortOrder: mode }).sidebarThreadSortOrder).toBe(
+        "updated_at",
+      );
+    }
+    expect(() => decodeClientSettingsPatch({ sidebarActiveSortOrder: "unknown" })).toThrow();
+  });
+
   it("defaults to the current sidebar", () => {
     expect(decodeClientSettings({}).legacySidebarEnabled).toBe(false);
   });

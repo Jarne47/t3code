@@ -76,7 +76,7 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
@@ -705,6 +705,7 @@ function OpenCommandPaletteDialog(props: {
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
+  const updateClientSettings = useUpdateClientSettings();
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -1899,6 +1900,20 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:sidebar-layout",
+    searchTerms: ["sidebar", "legacy", "new", "layout", "toggle"],
+    title: clientSettings.legacySidebarEnabled
+      ? "Switch to new sidebar"
+      : "Switch to legacy sidebar",
+    icon: <MonitorIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "sidebar.toggleLayout",
+    run: async () => {
+      await updateClientSettings({ legacySidebarEnabled: !clientSettings.legacySidebarEnabled });
+    },
+  });
 
   const changeThemeItem: CommandPaletteSubmenuItem = {
     kind: "submenu",

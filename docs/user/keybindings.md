@@ -143,3 +143,5 @@ keyboard repeat; if repeat is disabled, use two presses or the application menu.
 Change **Settings → General → Confirmations → Quit shortcut** to **Direct** for a
 single press or **Double press** for two presses only. Choosing **Quit** from the
 application menu always quits immediately.
+
+`sidebar.toggleLayout` (Mod+Shift+B) switches between the legacy project tree and the new sidebar. `sidebar.toggle` (Mod+B) continues to show or hide the sidebar.
