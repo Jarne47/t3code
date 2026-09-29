@@ -779,7 +779,7 @@ const make = Effect.gen(function* () {
       // interruption (shutdown) still propagates.
       const result = yield* ensureTranscript(ThreadId.make(row.thread_id)).pipe(
         Effect.catchCauseIf(
-          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) => !Cause.hasInterrupts(cause),
           (cause) =>
             Effect.logWarning("Failed to hydrate migrated v1 thread transcript", {
               threadId: row.thread_id,
