@@ -27,7 +27,7 @@ const SPA_BODY = "<!doctype html><html><head><title>OpenCode</title></head></htm
 
 const serverReplying = (reply: {
   readonly status: number;
-  readonly contentType: string;
+  readonly contentType?: string;
   readonly body: string;
 }) =>
   Layer.succeed(
@@ -38,7 +38,7 @@ const serverReplying = (reply: {
           request,
           new Response(reply.body, {
             status: reply.status,
-            headers: { "content-type": reply.contentType },
+            headers: reply.contentType === undefined ? {} : { "content-type": reply.contentType },
           }),
         ),
       ),
@@ -68,6 +68,25 @@ describe("OpenCode2Server.verifyServer", () => {
         serverReplying({ status: 401, contentType: "application/json", body: UNAUTHORIZED_BODY }),
       ).pipe(Effect.flip);
       assert.include(error.detail, "rejected the server password");
+    }),
+  );
+
+  // 1.x rejects a wrong password with an empty 401, which the client cannot decode.
+  it.effect("reports an empty-body 401 as a rejected password", () =>
+    Effect.gen(function* () {
+      const error = yield* verify(serverReplying({ status: 401, body: "" })).pipe(Effect.flip);
+      assert.include(error.detail, "rejected the server password");
+    }),
+  );
+
+  it.effect("reports a server error as a server error, not as unreachable", () =>
+    Effect.gen(function* () {
+      for (const status of [500, 502]) {
+        const error = yield* verify(
+          serverReplying({ status, contentType: "text/plain", body: "upstream failed" }),
+        ).pipe(Effect.flip);
+        assert.include(error.detail, `returned HTTP ${status}`);
+      }
     }),
   );
 

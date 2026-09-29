@@ -62,11 +62,37 @@ export const serverEnvironment = (
   return { ...rest, OPENCODE_PASSWORD: Redacted.value(password) };
 };
 
-const isUnreachable = (cause: unknown) =>
-  HttpClientError.isHttpClientError(cause) ||
-  (P.isTagged(cause, "ClientError") &&
+/** The client wraps HTTP failures in a `ClientError`; this unwraps either shape. */
+const httpFailureOf = (cause: unknown): HttpClientError.HttpClientError | undefined => {
+  if (HttpClientError.isHttpClientError(cause)) return cause;
+  if (
+    P.isTagged(cause, "ClientError") &&
     P.hasProperty(cause, "cause") &&
-    HttpClientError.isHttpClientError(cause.cause));
+    HttpClientError.isHttpClientError(cause.cause)
+  ) {
+    return cause.cause;
+  }
+  return undefined;
+};
+
+/**
+ * Describes a failed `/api/info` call. Only a transport failure means the
+ * server is unreachable; a 401 without the 2.x error body is still a rejected
+ * password (1.x sends it empty), and any other failed status is a server error.
+ * A 2xx the client cannot decode is not OpenCode 2 (1.x answers with HTML).
+ */
+const describeInfoFailure = (cause: unknown, url: string) => {
+  const failure = httpFailureOf(cause);
+  if (failure?.reason._tag === "TransportError") {
+    return `Could not reach the OpenCode server at ${url}.`;
+  }
+  const status = failure?.response?.status;
+  if (status === 401) return `The OpenCode server at ${url} rejected the server password.`;
+  if (status !== undefined && (status < 200 || status >= 300)) {
+    return `The OpenCode server at ${url} returned HTTP ${status}.`;
+  }
+  return `The server at ${url} is not an OpenCode 2 server.`;
+};
 
 /**
  * Confirms a server is an authenticated OpenCode 2 server through `/api/info`
@@ -95,16 +121,12 @@ export const verifyServer = (client: OpenCodeClient, url: string) =>
           }),
         ),
     }),
-    // The client wraps transport failures in `ClientError` too. Anything else
-    // that answered is not an OpenCode 2 server: 1.x returns the web UI's HTML here.
     Effect.mapError((cause) =>
       OpenCodeRuntimeError.is(cause)
         ? cause
         : new OpenCodeRuntimeError({
             operation: "server.info",
-            detail: isUnreachable(cause)
-              ? `Could not reach the OpenCode server at ${url}.`
-              : `The server at ${url} is not an OpenCode 2 server.`,
+            detail: describeInfoFailure(cause, url),
             cause,
           }),
     ),

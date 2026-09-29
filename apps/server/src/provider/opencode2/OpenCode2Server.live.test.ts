@@ -6,15 +6,21 @@
  * No model is called. The server runs with isolated HOME and XDG directories.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { AbsolutePath, Location } from "@opencode/client/effect";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Filter from "effect/Filter";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/unstable/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { describe } from "vite-plus/test";
 
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
@@ -33,6 +39,43 @@ const isAlive = (pid: number) => {
     return false;
   }
 };
+
+/** Starts `opencode serve` the way a user would run it themselves; stopped by its PID. */
+const startExternalServer = Effect.fn("OpenCode2ServerLive.startExternalServer")(function* (input: {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly directory: string;
+}) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const child = yield* spawner.spawn(
+    ChildProcess.make(binaryPath!, ["serve", "--hostname=127.0.0.1", "--port=0"], {
+      cwd: input.directory,
+      env: input.environment,
+    }),
+  );
+  const pid = Number(child.pid);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // Already exited.
+      }
+    }).pipe(Effect.andThen(child.exitCode), Effect.timeout("10 seconds"), Effect.ignore),
+  );
+  const url = yield* child.stdout.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.filterMap(
+      Filter.fromPredicateOption((line: string) =>
+        Option.fromUndefinedOr(/server listening on\s+(https?:\/\/\S+)/i.exec(line)?.[1]),
+      ),
+    ),
+    Stream.runHead,
+    Effect.flatMap(Effect.fromOption),
+    Effect.timeout("30 seconds"),
+  );
+  return { url, pid };
+});
 
 describe.runIf(binaryPath !== undefined)("OpenCode2Server live", () => {
   it.live(
@@ -79,7 +122,7 @@ describe.runIf(binaryPath !== undefined)("OpenCode2Server live", () => {
             const info = yield* connection.client.server.info();
             const session = yield* connection.client.session.create({
               title: "first location",
-              location: { directory: first } as never,
+              location: Location.PublicRef.make({ directory: AbsolutePath.make(first) }),
             });
             return { ...connection, pid: info.pid, session };
           }),
@@ -94,7 +137,7 @@ describe.runIf(binaryPath !== undefined)("OpenCode2Server live", () => {
             const info = yield* connection.client.server.info();
             const session = yield* connection.client.session.create({
               title: "second location",
-              location: { directory: second } as never,
+              location: Location.PublicRef.make({ directory: AbsolutePath.make(second) }),
             });
             return { url: connection.url, pid: info.pid, session };
           }),
@@ -123,6 +166,35 @@ describe.runIf(binaryPath !== undefined)("OpenCode2Server live", () => {
         });
         const ambientRejected = yield* ambient.withConnection(() => Effect.void).pipe(Effect.flip);
         assert.include(ambientRejected.detail, "rejected the server password");
+
+        // An external server whose password is not ASCII: OpenCode decodes Basic
+        // credentials as UTF-8, so the configured password must be sent that way.
+        const utf8Password = "pässwörd€";
+        const externalServer = yield* startExternalServer({
+          environment: OpenCode2Server.serverEnvironment(environment, Redacted.make(utf8Password)),
+          directory: second,
+        });
+        const utf8 = yield* OpenCode2Server.make({
+          binaryPath: binaryPath!,
+          serverUrl: externalServer.url,
+          serverPassword: utf8Password,
+          directory: second,
+          environment,
+        });
+        const utf8Connection = yield* utf8.withConnection((connection) =>
+          Effect.succeed(connection),
+        );
+        assert.strictEqual(utf8Connection.version, "2.0.18");
+        assert.isTrue(utf8Connection.external);
+        const asciiOnly = yield* OpenCode2Server.make({
+          binaryPath: binaryPath!,
+          serverUrl: externalServer.url,
+          serverPassword: "passwrd",
+          directory: second,
+          environment,
+        });
+        const asciiRejected = yield* asciiOnly.withConnection(() => Effect.void).pipe(Effect.flip);
+        assert.include(asciiRejected.detail, "rejected the server password");
 
         // Closing the instance stops the server it spawned.
         yield* Scope.close(instanceScope, Exit.void);
