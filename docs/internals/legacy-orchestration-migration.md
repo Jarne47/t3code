@@ -49,9 +49,9 @@ local or fork migration under an id this build later assigns to a different migr
 never receives this build's migration at that id. For ids 55 and up, which hold V2's own schema,
 `runMigrations` refuses to start before migrating, because V2 cannot run without them. Below 55 it
 only logs each recorded id whose name differs from the manifest, since real databases carry
-site-local migrations there and still work. There is no safe id range
-for a fork inside this ledger: any id at or below a future upstream id masks it forever, so fork
-schema changes belong in a separate migration table or outside the migrator entirely.
+site-local migrations there and still work. There is no safe id range for a fork inside this
+ledger: any id at or below a future upstream id masks it forever, so fork schema changes belong in
+a separate migration table or outside the migrator entirely.
 
 ## Recovery
 
