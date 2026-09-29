@@ -1,12 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { HttpClient, HttpClientError } from "effect/unstable/http";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http";
 
-import {
-  OpenCodeRuntime,
-  OpenCodeRuntimeError,
-  type OpenCodeRuntimeShape,
-} from "./opencodeRuntime.ts";
+import * as OpenCodeRuntime from "./opencodeRuntime.ts";
 import {
   classifyOpenCodeCliVersion,
   makeOpenCodeRuntimeProbe,
@@ -20,12 +16,12 @@ import {
 
 const noBinary = {
   runOpenCodeCommand: () => Effect.die("A configured server must not run the local binary"),
-} as unknown as OpenCodeRuntimeShape;
+} as unknown as OpenCodeRuntime.OpenCodeRuntimeShape;
 
 const probeServer = (serverUrl: string, serverPassword: string, http: HttpClient.HttpClient) =>
   probeOpenCodeRuntime({ binaryPath: "opencode", serverUrl, serverPassword }).pipe(
     Effect.provideService(HttpClient.HttpClient, http),
-    Effect.provideService(OpenCodeRuntime, noBinary),
+    Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, noBinary),
   );
 const SERVER_URL = "http://127.0.0.1:4096/";
 
@@ -65,6 +61,29 @@ describe("OpenCode version probe", () => {
       );
       assert.deepStrictEqual(probed, { generation: "v1", version: "1.18.32" });
       assert.deepStrictEqual(paths, ["/api/info", "/global/health"]);
+    }),
+  );
+
+  it.effect("keeps a server URL's path prefix and query when probing", () =>
+    Effect.gen(function* () {
+      const urls: Array<string> = [];
+      const replay = replayOpenCodeServer(OPENCODE_1_RESPONSES, "pw");
+      // A reverse proxy mounting OpenCode under /opencode, reached with a routing query.
+      const proxied = HttpClient.make((request, url) => {
+        urls.push(url.href);
+        return replay.execute(
+          HttpClientRequest.setUrl(
+            request,
+            `http://127.0.0.1:4096${url.pathname.replace(/^\/opencode/, "")}`,
+          ),
+        );
+      });
+      const probed = yield* probeServer("http://proxy:8080/opencode/?route=oc", "pw", proxied);
+      assert.strictEqual(probed.generation, "v1");
+      assert.deepStrictEqual(urls, [
+        "http://proxy:8080/opencode/api/info?route=oc",
+        "http://proxy:8080/opencode/global/health?route=oc",
+      ]);
     }),
   );
 
@@ -149,12 +168,14 @@ describe("OpenCode version probe", () => {
           const stdout = outputs[calls++];
           return stdout
             ? Effect.succeed({ stdout, stderr: "", code: 0 })
-            : Effect.fail(new OpenCodeRuntimeError({ operation: "spawn", detail: "ENOENT" }));
+            : Effect.fail(
+                new OpenCodeRuntime.OpenCodeRuntimeError({ operation: "spawn", detail: "ENOENT" }),
+              );
         },
-      } as unknown as OpenCodeRuntimeShape;
+      } as unknown as OpenCodeRuntime.OpenCodeRuntimeShape;
       const probe = yield* makeOpenCodeRuntimeProbe(
         probeOpenCodeRuntime({ binaryPath: "opencode", serverUrl: "", serverPassword: "" }).pipe(
-          Effect.provideService(OpenCodeRuntime, runtime),
+          Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
           Effect.provideService(
             HttpClient.HttpClient,
             HttpClient.make(() => Effect.die("A local binary must not be probed over HTTP")),

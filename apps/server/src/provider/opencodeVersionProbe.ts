@@ -8,11 +8,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import {
-  MINIMUM_OPENCODE_VERSION,
-  OpenCodeRuntime,
-  OpenCodeRuntimeError,
-} from "./opencodeRuntime.ts";
+import * as OpenCodeRuntime from "./opencodeRuntime.ts";
 import { parseGenericCliVersion } from "./providerSnapshot.ts";
 
 export interface ProbedOpenCode {
@@ -71,7 +67,7 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
   binaryPath: string,
   environment: NodeJS.ProcessEnv | undefined,
 ) {
-  const runtime = yield* OpenCodeRuntime;
+  const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
   const { stdout } = yield* runtime
     .runOpenCodeCommand({
       binaryPath,
@@ -83,7 +79,7 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
         duration: OPENCODE_VERSION_PROBE_TIMEOUT,
         orElse: () =>
           Effect.fail(
-            new OpenCodeRuntimeError({
+            new OpenCodeRuntime.OpenCodeRuntimeError({
               operation: "probeOpenCodeBinary",
               detail: `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
             }),
@@ -92,9 +88,9 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
     );
   const result = classifyOpenCodeCliVersion(stdout);
   if (result) return result;
-  return yield* new OpenCodeRuntimeError({
+  return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
     operation: "probeOpenCodeBinary",
-    detail: `Unable to determine OpenCode version from \`opencode --version\` output. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
+    detail: `Unable to determine OpenCode version from \`opencode --version\` output. T3 Code requires OpenCode v${OpenCodeRuntime.MINIMUM_OPENCODE_VERSION} or newer.`,
   });
 });
 
@@ -105,10 +101,9 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
   serverPassword: string,
 ) {
   const client = yield* HttpClient.HttpClient;
-  const baseUrl = serverUrl.trim().replace(/\/+$/, "");
-  const protocol = URL.parse(baseUrl)?.protocol;
-  if (protocol !== "http:" && protocol !== "https:") {
-    return yield* new OpenCodeRuntimeError({
+  const baseUrl = URL.parse(serverUrl.trim());
+  if (baseUrl?.protocol !== "http:" && baseUrl?.protocol !== "https:") {
+    return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
       operation: "probeOpenCodeServer",
       detail: "The OpenCode server URL is not a valid http:// or https:// URL.",
     });
@@ -118,7 +113,10 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
     ? `Basic ${Buffer.from(`opencode:${serverPassword}`, "utf8").toString("base64")}`
     : undefined;
   for (const path of ["/api/info", "/global/health"] as const) {
-    const request = HttpClientRequest.get(`${baseUrl}${path}`);
+    // A path prefix and query on the configured URL are kept: `/base/?x=1` → `/base/api/info?x=1`.
+    const url = new URL(baseUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
+    const request = HttpClientRequest.get(url.href);
     const result = yield* client
       .execute(
         authorization
@@ -137,7 +135,7 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
         ),
         Effect.mapError(
           (cause) =>
-            new OpenCodeRuntimeError({
+            new OpenCodeRuntime.OpenCodeRuntimeError({
               operation: "probeOpenCodeServer",
               detail: "Couldn't reach the OpenCode server.",
               cause,
@@ -147,7 +145,7 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
           duration: OPENCODE_SERVER_PROBE_TIMEOUT,
           orElse: () =>
             Effect.fail(
-              new OpenCodeRuntimeError({
+              new OpenCodeRuntime.OpenCodeRuntimeError({
                 operation: "probeOpenCodeServer",
                 detail: "Timed out while checking the OpenCode server version.",
               }),
@@ -155,16 +153,16 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
         }),
       );
     if (result === "unauthorized") {
-      return yield* new OpenCodeRuntimeError({
+      return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
         operation: "probeOpenCodeServer",
         detail: "401 Unauthorized: the OpenCode server rejected the password.",
       });
     }
     if (result !== undefined) return result;
   }
-  return yield* new OpenCodeRuntimeError({
+  return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
     operation: "probeOpenCodeServer",
-    detail: `The server did not identify itself as OpenCode. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
+    detail: `The server did not identify itself as OpenCode. T3 Code requires OpenCode v${OpenCodeRuntime.MINIMUM_OPENCODE_VERSION} or newer.`,
   });
 });
 
@@ -176,7 +174,11 @@ export const probeOpenCodeRuntime = (
     readonly serverPassword: string;
   },
   environment?: NodeJS.ProcessEnv,
-): Effect.Effect<ProbedOpenCode, OpenCodeRuntimeError, HttpClient.HttpClient | OpenCodeRuntime> =>
+): Effect.Effect<
+  ProbedOpenCode,
+  OpenCodeRuntime.OpenCodeRuntimeError,
+  HttpClient.HttpClient | OpenCodeRuntime.OpenCodeRuntime
+> =>
   settings.serverUrl.trim().length > 0
     ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword)
     : probeOpenCodeBinary(settings.binaryPath, environment);
