@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vite-plus/test";
-import { derivePendingBackgroundWork } from "./orchestrationV2PendingBackgroundWork.ts";
+import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
+import {
+  backgroundWorkHoldsCompletion,
+  derivePendingBackgroundWork,
+} from "./orchestrationV2PendingBackgroundWork.ts";
+
+describe("backgroundWorkHoldsCompletion", () => {
+  const task = (
+    taskId: string,
+    kind: OrchestrationV2PendingBackgroundTask["kind"],
+  ): OrchestrationV2PendingBackgroundTask => ({ taskId, kind });
+
+  it.each([
+    ["nothing pending", false, []],
+    ["a dev server", false, [task("dev", "command")]],
+    ["two long-lived shells", false, [task("web", "command"), task("api", "command")]],
+    ["a subagent", true, [task("review", "subagent")]],
+    ["a monitor", true, [task("watch", "monitor")]],
+    ["a command and a monitor", true, [task("dev", "command"), task("watch", "monitor")]],
+    ["a command and a subagent", true, [task("dev", "command"), task("review", "subagent")]],
+    // Also what an unknown or missing kind decodes to.
+    ["work the provider cannot name", true, [task("opaque", "background_task")]],
+  ] as const)("with %s pending, holds completion: %s", (_case, holds, tasks) => {
+    expect(backgroundWorkHoldsCompletion(tasks)).toBe(holds);
+  });
+});
 
 describe("derivePendingBackgroundWork", () => {
   it("returns empty while the latest run is not settled", () => {

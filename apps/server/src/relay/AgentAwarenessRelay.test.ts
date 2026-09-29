@@ -277,6 +277,9 @@ describe("AgentAwarenessRelay", () => {
       "run.created",
       "run.updated",
       "runtime-request.updated",
+      // Pending background work changes can release a held completion.
+      "subagent.updated",
+      "provider-thread.updated",
       "thread.metadata-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",

@@ -76,8 +76,10 @@ export function shouldPublishAgentAwarenessEvent(
   ) {
     return false;
   }
-  // projectThreadAwarenessV2 reads thread metadata, run status, and pending requests.
-  // Message bodies and tool progress cannot change the published activity.
+  // projectThreadAwarenessV2 reads thread metadata, run status, pending requests,
+  // and pending background work (a finished subagent or a cleared roster can
+  // release a held completion). Message bodies and tool progress cannot change
+  // the published activity.
   switch (event.type) {
     case "thread.created":
     case "thread.archived":
@@ -90,6 +92,8 @@ export function shouldPublishAgentAwarenessEvent(
     case "run.created":
     case "run.updated":
     case "runtime-request.updated":
+    case "subagent.updated":
+    case "provider-thread.updated":
       return true;
     case "thread.settled":
     case "thread.unsettled":
@@ -108,11 +112,9 @@ export function shouldPublishAgentAwarenessEvent(
     case "run-attempt.created":
     case "run-attempt.updated":
     case "node.updated":
-    case "subagent.updated":
     case "provider-session.attached":
     case "provider-session.updated":
     case "provider-session.detached":
-    case "provider-thread.updated":
     case "provider-turn.updated":
     case "message.updated":
     case "turn-item.updated":
