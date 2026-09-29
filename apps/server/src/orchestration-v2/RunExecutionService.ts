@@ -27,6 +27,7 @@ import {
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -519,6 +520,32 @@ export class RunExecutionServiceV2 extends Context.Service<
 >()("t3/orchestration-v2/RunExecutionService/RunExecutionServiceV2") {}
 
 /**
+ * Bound on each provider call made while a run starts: opening the session,
+ * loading the thread, and handing the provider the turn. Adapters return from
+ * these once the provider answers, so a call that outlasts the bound is hung and
+ * fails the run instead of holding the thread's effect lane until restart. The
+ * slowest legitimate provider calls in this codebase are capped at 180s.
+ */
+export const ProviderStartTimeout = Context.Reference<Duration.Duration>(
+  "t3/orchestration-v2/RunExecutionService/ProviderStartTimeout",
+  { defaultValue: () => Duration.minutes(5) },
+);
+
+/** Fails `step` with a `TimeoutError` naming it when it outlasts `timeout`. */
+export const boundProviderStartStep =
+  (timeout: Duration.Duration, step: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.timeoutOrElse({
+        duration: timeout,
+        orElse: () =>
+          Effect.fail(
+            new Cause.TimeoutError(`${step} did not complete within ${Duration.format(timeout)}.`),
+          ),
+      }),
+    );
+
+/**
  * IMPLEMENTATIONS
  */
 export const layer: Layer.Layer<
@@ -538,6 +565,7 @@ export const layer: Layer.Layer<
     const providerEventIngestor = yield* ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettingsService;
     const finalizationObserver = yield* RunFinalizationObserver;
+    const providerStartTimeout = yield* ProviderStartTimeout;
 
     const writeFinalRunEvents = (input: {
       readonly run: OrchestrationV2Run;
@@ -1362,8 +1390,10 @@ export const layer: Layer.Layer<
               ))
             : input.session.startTurn(turnInput);
           yield* startTurn.pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("orchestration V2 provider turn start failed", {
+            boundProviderStartStep(providerStartTimeout, "Provider turn start"),
+            Effect.catchCause((cause) => {
+              const failure = Cause.squash(cause);
+              return Effect.logError("orchestration V2 provider turn start failed", {
                 runId: input.run.id,
                 cause,
               }).pipe(
@@ -1392,7 +1422,12 @@ export const layer: Layer.Layer<
                             openRunOwnedSubagents: openSubagents,
                             terminal: makeFailedTerminalEvent(
                               makeProviderFailure({
-                                cause: Cause.squash(cause),
+                                cause: failure,
+                                // A timeout has no curated text; its own message says
+                                // which step hung and for how long.
+                                ...(Cause.isTimeoutError(failure)
+                                  ? { message: failure.message }
+                                  : {}),
                                 class: "provider_error",
                               }),
                               latestItemOrdinal + 1,
@@ -1413,8 +1448,8 @@ export const layer: Layer.Layer<
                       cause: { start: cause, write: writeCause },
                     }),
                 ),
-              ),
-            ),
+              );
+            }),
           );
         }),
     } satisfies RunExecutionServiceV2Shape);

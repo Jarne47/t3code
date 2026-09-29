@@ -31,11 +31,14 @@ import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -58,6 +61,7 @@ import {
   layer as runExecutionServiceLayer,
   makeProviderEventRoutingState,
   type ProviderEventRouteIdentity,
+  ProviderStartTimeout,
   routeProviderEvent,
   RunExecutionServiceV2,
   selectInheritedBackgroundTurnItems,
@@ -3160,6 +3164,51 @@ it.effect("keeps completed runs completed when pull request refresh fails", () =
   }),
 );
 
+it.effect("fails the run when the provider never accepts the turn", () =>
+  Effect.gen(function* () {
+    const startReached = yield* Deferred.make<void>();
+    const fiber = yield* captureRootRunTermination({
+      key: "start-timeout:hung",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      events: () => Stream.never,
+      startTurn: () => Deferred.succeed(startReached, undefined).pipe(Effect.andThen(Effect.never)),
+      providerStartTimeout: Duration.seconds(1),
+    }).pipe(Effect.forkChild);
+
+    yield* Deferred.await(startReached);
+    yield* TestClock.adjust("999 millis");
+    assert.isUndefined(fiber.pollUnsafe());
+
+    yield* TestClock.adjust("1 millis");
+    const { written, observed } = yield* Fiber.join(fiber);
+    assert.deepEqual(observed, ["run:failed", "pull-requests-refreshed"]);
+    const error = written.find((item) => item.type === "error");
+    assert.equal(error?.failure.class, "provider_error");
+    assert.equal(error?.failure.message, "Provider turn start did not complete within 1s.");
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("leaves a turn the provider accepts under the start bound alone", () =>
+  Effect.gen(function* () {
+    const startReached = yield* Deferred.make<void>();
+    const fiber = yield* captureRootRunTermination({
+      key: "start-timeout:accepted",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      startTurn: () =>
+        Deferred.succeed(startReached, undefined).pipe(
+          Effect.andThen(Effect.sleep(Duration.millis(999))),
+        ),
+      providerStartTimeout: Duration.seconds(1),
+    }).pipe(Effect.forkChild);
+
+    yield* Deferred.await(startReached);
+    yield* TestClock.adjust("999 millis");
+    const { written, observed } = yield* Fiber.join(fiber);
+    assert.deepEqual(observed, ["run:interrupted", "pull-requests-refreshed"]);
+    assert.isUndefined(written.find((item) => item.type === "error"));
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
 function captureRootRunTermination(input: {
   readonly key: string;
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, never>;
@@ -3170,6 +3219,7 @@ function captureRootRunTermination(input: {
   ) => Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
   readonly startTurn?: ProviderAdapterV2SessionRuntime["startTurn"];
   readonly refreshAfterTurn?: Effect.Effect<void>;
+  readonly providerStartTimeout?: Duration.Duration;
 }) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(input.key);
@@ -3229,6 +3279,9 @@ function captureRootRunTermination(input: {
                 Effect.andThen(input.refreshAfterTurn ?? Effect.void),
               ),
           }),
+          ...(input.providerStartTimeout === undefined
+            ? []
+            : [Layer.succeed(ProviderStartTimeout, input.providerStartTimeout)]),
         ),
       ),
     );

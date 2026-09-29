@@ -46,7 +46,9 @@ import { ProjectionStoreV2, type ProjectionRuntimeRecoveryState } from "./Projec
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import {
+  boundProviderStartStep,
   canRouteRelatedSubagent,
+  ProviderStartTimeout,
   RunExecutionServiceV2,
   selectInheritedBackgroundTurnItems,
 } from "./RunExecutionService.ts";
@@ -113,6 +115,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicyV2;
+    const providerStartTimeout = yield* ProviderStartTimeout;
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -524,25 +527,31 @@ export const layer: Layer.Layer<
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
+      // A provider that hangs on open or load fails the run now, on any attempt:
+      // retrying would only wait out the bound again with nothing visible.
+      const boundOpen = boundProviderStartStep(providerStartTimeout, "Provider session open");
+      const boundLoad = boundProviderStartStep(providerStartTimeout, "Provider thread load");
       const sessionResult = yield* Effect.result(
-        providerSessions.open({
-          threadId: projection.thread.id,
-          providerSessionId,
-          modelSelection: run.modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingSessionProjection === undefined
-            ? {}
-            : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
-            ? {}
-            : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
-            ? {}
-            : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
-              }),
-        }),
+        providerSessions
+          .open({
+            threadId: projection.thread.id,
+            providerSessionId,
+            modelSelection: run.modelSelection,
+            runtimePolicy: resolvedRuntimePolicy,
+            ...(existingSessionProjection === undefined
+              ? {}
+              : { resumeFromSession: existingSessionProjection }),
+            ...(providerThread.nativeThreadRef?.nativeId == null
+              ? {}
+              : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+            ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+              ? {}
+              : {
+                  initialProviderItemIdentityVersion:
+                    providerThread.nativeMetadata.itemIdentityVersion,
+                }),
+          })
+          .pipe(boundOpen),
       );
       // The last start attempt fails the run with the provider's own reason
       // instead of leaving it `starting` after the effect gives up. A run that
@@ -578,7 +587,9 @@ export const layer: Layer.Layer<
           });
         });
       if (sessionResult._tag === "Failure") {
-        if (input.willRetry === true) return yield* sessionResult.failure;
+        if (input.willRetry === true && !Cause.isTimeoutError(sessionResult.failure)) {
+          return yield* sessionResult.failure;
+        }
         yield* settleStartFailure({
           signal: "provider-session-open-failure",
           title: "Provider session failed to open",
@@ -593,9 +604,11 @@ export const layer: Layer.Layer<
         load: Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>,
       ) =>
         Effect.gen(function* () {
-          const loaded = yield* Effect.result(load);
+          const loaded = yield* Effect.result(load.pipe(boundLoad));
           if (loaded._tag === "Success") return loaded.success;
-          if (input.willRetry === true) return yield* loaded.failure;
+          if (input.willRetry === true && !Cause.isTimeoutError(loaded.failure)) {
+            return yield* loaded.failure;
+          }
           yield* settleStartFailure({
             signal: "provider-thread-load-failure",
             title: "Provider turn failed to start",
@@ -675,15 +688,27 @@ export const layer: Layer.Layer<
                   cause: "Uncertain native history injection",
                 }),
               )
-            : session.resumeThread({
-                providerThread,
-                threadId: projection.thread.id,
-                modelSelection: run.modelSelection,
-                runtimePolicy: resolvedRuntimePolicy,
-              }),
+            : session
+                .resumeThread({
+                  providerThread,
+                  threadId: projection.thread.id,
+                  modelSelection: run.modelSelection,
+                  runtimePolicy: resolvedRuntimePolicy,
+                })
+                .pipe(boundLoad),
         );
         if (resumed._tag === "Success") {
           return resumed.success;
+        }
+        // A hung resume says the provider is unresponsive, not that the native
+        // thread is gone; a fresh thread would only hang the same way.
+        if (Cause.isTimeoutError(resumed.failure)) {
+          yield* settleStartFailure({
+            signal: "provider-thread-load-failure",
+            title: "Provider turn failed to start",
+            error: resumed.failure,
+          });
+          return undefined;
         }
 
         yield* Effect.logWarning("Provider resume failed; attempting a fresh native session", {

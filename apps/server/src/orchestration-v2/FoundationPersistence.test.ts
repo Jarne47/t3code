@@ -2526,6 +2526,69 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
+  it.effect("frees a thread's lane when a running effect exceeds its execution timeout", () =>
+    Effect.gen(function* () {
+      const outbox = yield* EffectOutboxV2;
+      const commandId = CommandId.make("command:foundation-execution-timeout");
+      const threadId = ThreadId.make("thread:foundation-execution-timeout");
+      const hungEffectId = "effect:foundation-execution-timeout:hung";
+      const nextEffectId = "effect:foundation-execution-timeout:next";
+      const hungStarted = yield* Deferred.make<void>();
+      const executions = yield* Ref.make<ReadonlyArray<string>>([]);
+      yield* outbox.enqueue([
+        {
+          id: hungEffectId,
+          commandId,
+          threadId,
+          request: {
+            type: "provider-session.detach",
+            providerSessionId: ProviderSessionId.make("session:foundation-execution-timeout"),
+          },
+        },
+        { id: nextEffectId, commandId, threadId, request: { type: "terminal.cleanup" } },
+      ]);
+
+      const executorLayer = Layer.succeed(
+        OrchestrationEffectExecutorV2,
+        OrchestrationEffectExecutorV2.of({
+          execute: (effect) =>
+            Ref.update(executions, (current) => [...current, effect.id]).pipe(
+              Effect.andThen(
+                effect.id === hungEffectId
+                  ? Deferred.succeed(hungStarted, undefined).pipe(Effect.andThen(Effect.never))
+                  : Effect.void,
+              ),
+            ),
+        }),
+      );
+      const workerLayer = effectWorkerLayerWithOptions({
+        workerId: "execution-timeout-worker",
+        effectTimeoutMs: 1_000,
+      }).pipe(Layer.provide(Layer.merge(Layer.succeed(EffectOutboxV2, outbox), executorLayer)));
+
+      yield* Effect.gen(function* () {
+        const worker = yield* OrchestrationEffectWorkerV2;
+        const hungFiber = yield* worker.runOnce.pipe(Effect.forkChild);
+        yield* Deferred.await(hungStarted);
+        // The lane stays closed while the first effect is still running.
+        yield* TestClock.adjust("999 millis");
+        assert.isFalse(yield* worker.runOnce);
+        assert.deepEqual(yield* Ref.get(executions), [hungEffectId]);
+
+        yield* TestClock.adjust("1 millis");
+        assert.isTrue(yield* Fiber.join(hungFiber));
+        const hung = Option.getOrThrow(yield* outbox.get(hungEffectId));
+        assert.equal(hung.status, "pending");
+        assert.equal(hung.attemptCount, 1);
+        assert.include(hung.lastError ?? "", "timed out after 1000ms");
+
+        assert.isTrue(yield* worker.runOnce);
+        assert.deepEqual(yield* Ref.get(executions), [hungEffectId, nextEffectId]);
+        assert.equal(Option.getOrThrow(yield* outbox.get(nextEffectId)).status, "succeeded");
+      }).pipe(Effect.provide(workerLayer));
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect(
     "persists shutdown continuation intent through the real event sink without domain events",
     () =>

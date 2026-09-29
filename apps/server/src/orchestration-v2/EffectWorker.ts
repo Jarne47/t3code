@@ -43,6 +43,18 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
 ) {}
 
 /**
+ * Backstop for a handler that never returns. Only one non-title effect runs per
+ * thread, so a hung row would otherwise block that thread's interrupt, detach and
+ * cleanup until restart. Every handler returns once its provider or git call
+ * answers (a turn start returns when the provider accepts the turn, not when it
+ * finishes), and the slowest legitimate ones stay well under this: title
+ * generation caps each of its three attempts at 180s, worktree git operations at
+ * 5 minutes, and a provider start bounds each provider call at
+ * `ProviderStartTimeout` so it settles its run before this fires.
+ */
+const DEFAULT_EFFECT_TIMEOUT_MS = 15 * 60_000;
+
+/**
  * Pure interrupt races with hard process teardown or a dead session produce
  * "not active" protocol errors. Retrying those only delays recovery.
  *
@@ -475,6 +487,7 @@ export interface OrchestrationEffectWorkerOptions {
   readonly workerId?: string;
   readonly leaseDurationMs?: number;
   readonly maxAttempts?: number;
+  readonly effectTimeoutMs?: number;
 }
 
 export const layerWithOptions = (
@@ -492,6 +505,7 @@ export const layerWithOptions = (
       const workerId = options.workerId ?? `orchestration-v2:${process.pid}`;
       const leaseDurationMs = Math.max(1, options.leaseDurationMs ?? 30_000);
       const maxAttempts = Math.max(1, options.maxAttempts ?? 5);
+      const effectTimeoutMs = Math.max(1, options.effectTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS);
       const wasCancelled = (effectId: string) =>
         outbox.get(effectId).pipe(
           Effect.map(
@@ -626,9 +640,24 @@ export const layerWithOptions = (
           }).pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
           if (cancelledBeforeExecution) return true;
 
+          // A hung handler fails through the normal retry/fail path below under
+          // this claim's lease. Nothing reclaims a still-running row instead.
           const execution = executor
             .execute(effect, { willRetry: effect.attemptCount < maxAttempts })
-            .pipe(Effect.as("executed" as const));
+            .pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(effectTimeoutMs),
+                orElse: () =>
+                  Effect.fail(
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause: `Effect execution timed out after ${effectTimeoutMs}ms`,
+                    }),
+                  ),
+              }),
+              Effect.as("executed" as const),
+            );
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
             Effect.ensuring(outbox.clearCancellation(effect.id)),
           );

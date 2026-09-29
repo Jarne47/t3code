@@ -2,6 +2,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
+  CommandId,
   MessageId,
   NodeId,
   ProviderSessionId,
@@ -18,16 +19,29 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { ProviderAuthService } from "../provider/Services/ProviderAuthService.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
+import { EffectOutboxV2, layer as effectOutboxLayer } from "./EffectOutbox.ts";
+import {
+  layerWithOptions as effectWorkerLayerWithOptions,
+  OrchestrationEffectExecutionError,
+  OrchestrationEffectExecutorV2,
+  OrchestrationEffectWorkerV2,
+} from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -166,6 +180,10 @@ function makeLocalCommandHarness(input: {
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
+  /** Signalled when the session open begins; the open then never answers. */
+  readonly openHang?: Deferred.Deferred<void>;
+  /** Signalled when the thread load begins; the load then never answers. */
+  readonly ensureThreadHang?: Deferred.Deferred<void>;
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
   const threadId = ThreadId.make("thread-native-account-command");
@@ -388,28 +406,37 @@ function makeLocalCommandHarness(input: {
       ),
     ensureThread: () => Effect.succeed(providerThread),
   };
+  const hang = (started: Deferred.Deferred<void>) =>
+    Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never));
   const open = vi.fn(() =>
-    input.interruptOpen === true
-      ? Effect.interrupt
-      : "historyReadFailureAfterFallback" in input
-        ? Effect.succeed(resumeFallbackSession as never)
-        : "ensureThreadFailure" in input
-          ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
-          : "openFailure" in input
-            ? Effect.sync(() => {
-                if (input.interruptRunBeforeOpenFailure === true) interruptRun();
-              }).pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    new ProviderSessionManager.ProviderSessionOpenError({
-                      instanceId: newInstanceId,
-                      providerSessionId,
-                      cause: input.openFailure,
-                    }),
-                  ),
-                ),
-              )
-            : Effect.die("A local command must not open a native session."),
+    input.openHang !== undefined
+      ? hang(input.openHang)
+      : input.ensureThreadHang !== undefined
+        ? Effect.succeed({
+            driver: providerThread.driver,
+            ensureThread: () => hang(input.ensureThreadHang!),
+          } as never)
+        : input.interruptOpen === true
+          ? Effect.interrupt
+          : "historyReadFailureAfterFallback" in input
+            ? Effect.succeed(resumeFallbackSession as never)
+            : "ensureThreadFailure" in input
+              ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
+              : "openFailure" in input
+                ? Effect.sync(() => {
+                    if (input.interruptRunBeforeOpenFailure === true) interruptRun();
+                  }).pipe(
+                    Effect.andThen(
+                      Effect.fail(
+                        new ProviderSessionManager.ProviderSessionOpenError({
+                          instanceId: newInstanceId,
+                          providerSessionId,
+                          cause: input.openFailure,
+                        }),
+                      ),
+                    ),
+                  )
+                : Effect.die("A local command must not open a native session."),
   );
   const startRootRun = vi.fn(() => Effect.die("A local command must not start a native turn."));
   const tryHandlePromptCommand = vi.fn(() =>
@@ -491,10 +518,13 @@ function makeLocalCommandHarness(input: {
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({} as never),
         }),
+        Layer.succeed(RunExecutionService.ProviderStartTimeout, Duration.seconds(1)),
       ),
     ),
   );
   return {
+    threadId,
+    runId,
     open,
     writeIfRunCurrent,
     startRootRun,
@@ -800,3 +830,139 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+for (const willRetry of [false, true]) {
+  effectIt.effect(
+    `fails a starting run when its provider session never opens (willRetry: ${willRetry})`,
+    () =>
+      Effect.gen(function* () {
+        const openHang = yield* Deferred.make<void>();
+        const harness = makeLocalCommandHarness({ text: "Continue", openHang });
+
+        const fiber = yield* (willRetry ? harness.startWithRetry : harness.start).pipe(
+          Effect.forkChild,
+        );
+        yield* Deferred.await(openHang);
+        yield* TestClock.adjust("999 millis");
+        expect(fiber.pollUnsafe()).toBeUndefined();
+        expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+
+        // A hang is settled on this attempt; a retry would only wait it out again.
+        yield* TestClock.adjust("1 millis");
+        yield* Fiber.join(fiber);
+        expect(harness.open).toHaveBeenCalledOnce();
+        expect(harness.startRootRun).not.toHaveBeenCalled();
+        const projection = harness.projection();
+        expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+        expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
+        expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
+        expect(projection.turnItems).toMatchObject([
+          {
+            type: "error",
+            title: "Provider session failed to open",
+            failure: {
+              class: "provider_error",
+              message: "Provider session open did not complete within 1s.",
+            },
+          },
+        ]);
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+}
+
+effectIt.effect("fails a starting run when the provider never loads its thread", () =>
+  Effect.gen(function* () {
+    const ensureThreadHang = yield* Deferred.make<void>();
+    const harness = makeLocalCommandHarness({ text: "Continue", ensureThreadHang });
+
+    const fiber = yield* harness.startWithRetry.pipe(Effect.forkChild);
+    yield* Deferred.await(ensureThreadHang);
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(fiber);
+
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    expect(harness.projection().runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+    expect(harness.projection().turnItems).toMatchObject([
+      {
+        type: "error",
+        title: "Provider turn failed to start",
+        failure: {
+          class: "provider_error",
+          message: "Provider thread load did not complete within 1s.",
+        },
+      },
+    ]);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+effectIt.effect("frees the thread's effect lane once a hung start times out", () =>
+  Effect.gen(function* () {
+    const openHang = yield* Deferred.make<void>();
+    const harness = makeLocalCommandHarness({ text: "Continue", openHang });
+    const cleanups = yield* Ref.make(0);
+    const commandId = CommandId.make("command:provider-turn-start-timeout-lane");
+    const executorLayer = Layer.succeed(
+      OrchestrationEffectExecutorV2,
+      OrchestrationEffectExecutorV2.of({
+        execute: (effect) =>
+          effect.request.type === "provider-turn.start"
+            ? harness.start.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              )
+            : Ref.update(cleanups, (count) => count + 1),
+      }),
+    );
+
+    yield* Effect.gen(function* () {
+      const outbox = yield* EffectOutboxV2;
+      const workerLayer = effectWorkerLayerWithOptions({ workerId: "start-timeout-worker" }).pipe(
+        Layer.provide(Layer.merge(Layer.succeed(EffectOutboxV2, outbox), executorLayer)),
+      );
+      const worker = yield* OrchestrationEffectWorkerV2.pipe(Effect.provide(workerLayer));
+      yield* outbox.enqueue([
+        {
+          id: "effect:provider-turn-start-timeout-lane:start",
+          commandId,
+          threadId: harness.threadId,
+          request: { type: "provider-turn.start", runId: harness.runId },
+        },
+      ]);
+      // Enqueued after the start, as a thread delete would be.
+      yield* TestClock.adjust("1 millis");
+      yield* outbox.enqueue([
+        {
+          id: "effect:provider-turn-start-timeout-lane:cleanup",
+          commandId,
+          threadId: harness.threadId,
+          request: { type: "terminal.cleanup" },
+        },
+      ]);
+
+      const startFiber = yield* worker.runOnce.pipe(Effect.forkChild);
+      yield* Effect.raceFirst(
+        Deferred.await(openHang),
+        Fiber.join(startFiber).pipe(
+          Effect.andThen(Effect.die("the start effect settled before opening its session")),
+        ),
+      );
+      // Same-thread effects wait behind the running start.
+      expect(yield* worker.runOnce).toBe(false);
+      expect(yield* Ref.get(cleanups)).toBe(0);
+
+      yield* TestClock.adjust("1 second");
+      expect(yield* Fiber.join(startFiber)).toBe(true);
+      expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+      expect(yield* worker.runOnce).toBe(true);
+      expect(yield* Ref.get(cleanups)).toBe(1);
+      const statuses = (yield* outbox.listByCommandId(commandId)).map((effect) => effect.status);
+      expect(statuses).toEqual(["succeeded", "succeeded"]);
+    }).pipe(Effect.provide(effectOutboxLayer.pipe(Layer.provide(SqlitePersistenceMemory))));
+  }).pipe(Effect.provide(TestClock.layer())),
+);

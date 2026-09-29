@@ -1612,6 +1612,18 @@ export const layerWithOptions = (
                 }
               });
               const sessionScope = yield* Scope.make();
+              // An open that fails or is interrupted (a start timeout, a Stop)
+              // must not leave the provider process it spawned behind.
+              const abandonOpen = Scope.close(sessionScope, Exit.void).pipe(
+                Effect.ignore,
+                Effect.andThen(dropReservation),
+                // Revoke only a credential this open freshly minted: a reused
+                // credential is held by another live provider process and must
+                // survive this open's failure.
+                Effect.andThen(
+                  prepared.issued ? clearMcpSession(input.threadId, mcpCredentialId) : Effect.void,
+                ),
+              );
               const runtime = yield* adapter
                 .openSession({
                   threadId: input.threadId,
@@ -1633,21 +1645,8 @@ export const layerWithOptions = (
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),
-                  Effect.tapError(() =>
-                    Scope.close(sessionScope, Exit.void).pipe(
-                      Effect.ignore,
-                      Effect.andThen(dropReservation),
-                      // Revoke only a credential this open freshly minted: a
-                      // reused credential is held by another live provider
-                      // process and must survive this open's failure.
-                      Effect.andThen(
-                        prepared.issued
-                          ? clearMcpSession(input.threadId, mcpCredentialId)
-                          : Effect.void,
-                      ),
-                    ),
-                  ),
-                  Effect.onInterrupt(() => dropReservation),
+                  Effect.tapError(() => abandonOpen),
+                  Effect.onInterrupt(() => abandonOpen),
                   Effect.mapError(
                     (cause) =>
                       new ProviderSessionOpenError({

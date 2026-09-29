@@ -13,6 +13,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -751,3 +752,84 @@ it.effect("safely retries after replacement cleanup succeeds and start fails", (
     ]);
   }),
 );
+
+for (const attemptCount of [1, 5]) {
+  it.effect(
+    `${attemptCount === 1 ? "retries" : "fails"} a hung effect once its execution timeout elapses (attempt ${attemptCount})`,
+    () =>
+      Effect.gen(function* () {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const effectId = `effect:worker-execution-timeout:${attemptCount}`;
+        const workerId = "worker-execution-timeout";
+        const claimedEffect: OrchestrationEffectV2 = {
+          id: effectId,
+          commandId: CommandId.make("command:worker-execution-timeout"),
+          threadId: ThreadId.make("thread:worker-execution-timeout"),
+          request: {
+            type: "provider-turn.interrupt",
+            providerSessionId: oldSessionId,
+            providerThreadId,
+            providerTurnId,
+          },
+          status: "running",
+          attemptCount,
+          availableAt: now,
+          leaseOwner: workerId,
+          leaseExpiresAt: now,
+          createdAt: now,
+          updatedAt: now,
+          completedAt: null,
+          lastError: null,
+        };
+        const executionStarted = yield* Deferred.make<void>();
+        const retries = yield* Ref.make<ReadonlyArray<{ error: string; delayMs: number }>>([]);
+        const failures = yield* Ref.make<ReadonlyArray<string>>([]);
+        const outboxLayer = Layer.mock(EffectOutboxV2)({
+          claimNext: () => Effect.succeed(Option.some(claimedEffect)),
+          get: () => Effect.succeed(Option.some(claimedEffect)),
+          awaitCancellation: () => Effect.never,
+          clearCancellation: () => Effect.void,
+          retry: ({ error, delayMs }) =>
+            Ref.update(retries, (existing) => [...existing, { error, delayMs }]).pipe(
+              Effect.as(true),
+            ),
+          fail: ({ error }) =>
+            Ref.update(failures, (existing) => [...existing, error]).pipe(Effect.as(true)),
+        });
+        const executorLayer = Layer.succeed(
+          OrchestrationEffectExecutorV2,
+          OrchestrationEffectExecutorV2.of({
+            execute: () =>
+              Deferred.succeed(executionStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          }),
+        );
+        const workerLayer = effectWorkerLayerWithOptions({
+          workerId,
+          maxAttempts: 5,
+          effectTimeoutMs: 1_000,
+        }).pipe(Layer.provide(Layer.merge(outboxLayer, executorLayer)));
+
+        const fiber = yield* OrchestrationEffectWorkerV2.pipe(
+          Effect.flatMap((worker) => worker.runOnce),
+          Effect.provide(workerLayer),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(executionStarted);
+        yield* TestClock.adjust("999 millis");
+        assert.isUndefined(fiber.pollUnsafe());
+
+        yield* TestClock.adjust("1 millis");
+        assert.isTrue(yield* Fiber.join(fiber));
+        if (attemptCount === 1) {
+          const retry = (yield* Ref.get(retries))[0];
+          assert.isDefined(retry);
+          assert.include(retry.error, "timed out after 1000ms");
+          assert.equal(retry.delayMs, 100);
+          assert.isEmpty(yield* Ref.get(failures));
+        } else {
+          assert.isEmpty(yield* Ref.get(retries));
+          assert.include((yield* Ref.get(failures))[0] ?? "", "timed out after 1000ms");
+        }
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+}
