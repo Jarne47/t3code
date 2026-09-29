@@ -47,7 +47,10 @@ export function replayOpenCodeServer(
   password: string,
   requestedPaths: Array<string> = [],
 ) {
-  const expected = password ? `Basic ${btoa(`opencode:${password}`)}` : undefined;
+  // Both versions decode Basic credentials as UTF-8 (checked live with `pässwörd` and `pass€word`).
+  const expected = password
+    ? `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}`
+    : undefined;
   return HttpClient.make((request) => {
     const path = new URL(request.url).pathname;
     requestedPaths.push(path);

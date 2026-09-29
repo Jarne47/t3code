@@ -10,9 +10,8 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import {
   MINIMUM_OPENCODE_VERSION,
+  OpenCodeRuntime,
   OpenCodeRuntimeError,
-  openCodeRuntimeErrorDetail,
-  type OpenCodeRuntimeShape,
 } from "./opencodeRuntime.ts";
 import { parseGenericCliVersion } from "./providerSnapshot.ts";
 
@@ -27,19 +26,13 @@ export const OPENCODE_2_UNSUPPORTED_MESSAGE =
 
 const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
 const OPENCODE_SERVER_PROBE_TIMEOUT = "5 seconds";
+// 2.x's own CLI decodes `{version, pid}` from `/api/info`; requiring both keeps unrelated JSON out.
 const decodeApiInfo = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+  Schema.fromJsonString(Schema.Struct({ version: Schema.String, pid: Schema.Int })),
 );
 const decodeGlobalHealth = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ healthy: Schema.Literal(true), version: Schema.String })),
 );
-
-const probeError = (detail: string, cause?: unknown) =>
-  new OpenCodeRuntimeError({
-    operation: "probeOpenCodeVersion",
-    detail,
-    ...(cause === undefined ? {} : { cause }),
-  });
 
 function probed(version: string | null | undefined): ProbedOpenCode | undefined {
   const major = parseSemver(version ?? "")?.major;
@@ -67,48 +60,70 @@ function classifyOpenCodeProbeResponse(
   if (response.status === 401) return "unauthorized";
   const mediaType = response.contentType?.split(";")[0]?.trim().toLowerCase();
   if (response.status !== 200 || mediaType !== "application/json") return undefined;
-  const body = (path === "/api/info" ? decodeApiInfo : decodeGlobalHealth)(response.body);
-  return probed(Option.getOrUndefined(body)?.version);
+  const version: Option.Option<string> =
+    path === "/api/info"
+      ? Option.map(decodeApiInfo(response.body), (info) => info.version)
+      : Option.map(decodeGlobalHealth(response.body), (health) => health.version);
+  return probed(Option.getOrUndefined(version));
 }
 
-const probeOpenCodeBinary = (
-  runtime: Pick<OpenCodeRuntimeShape, "runOpenCodeCommand">,
-  input: { readonly binaryPath: string; readonly environment?: NodeJS.ProcessEnv },
-) =>
-  Effect.suspend(() => runtime.runOpenCodeCommand({ ...input, args: ["--version"] })).pipe(
-    Effect.timeoutOrElse({
-      duration: OPENCODE_VERSION_PROBE_TIMEOUT,
-      orElse: () =>
-        Effect.fail(
-          probeError(
-            `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
+const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
+  binaryPath: string,
+  environment: NodeJS.ProcessEnv | undefined,
+) {
+  const runtime = yield* OpenCodeRuntime;
+  const { stdout } = yield* runtime
+    .runOpenCodeCommand({
+      binaryPath,
+      args: ["--version"],
+      ...(environment === undefined ? {} : { environment }),
+    })
+    .pipe(
+      Effect.timeoutOrElse({
+        duration: OPENCODE_VERSION_PROBE_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new OpenCodeRuntimeError({
+              operation: "probeOpenCodeBinary",
+              detail: `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
+            }),
           ),
-        ),
-    }),
-    Effect.flatMap(({ stdout }) => {
-      const result = classifyOpenCodeCliVersion(stdout);
-      return result
-        ? Effect.succeed(result)
-        : Effect.fail(
-            probeError(
-              `Unable to determine OpenCode version from \`opencode --version\` output. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
-            ),
-          );
-    }),
-    Effect.withSpan("probeOpenCodeBinary"),
-  );
+      }),
+    );
+  const result = classifyOpenCodeCliVersion(stdout);
+  if (result) return result;
+  return yield* new OpenCodeRuntimeError({
+    operation: "probeOpenCodeBinary",
+    detail: `Unable to determine OpenCode version from \`opencode --version\` output. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
+  });
+});
 
+// Server failures reach clients through the provider status, so their details are fixed text:
+// the underlying error can carry the configured URL, its credentials, or the password header.
 const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
   serverUrl: string,
   serverPassword: string,
 ) {
   const client = yield* HttpClient.HttpClient;
   const baseUrl = serverUrl.trim().replace(/\/+$/, "");
+  const protocol = URL.parse(baseUrl)?.protocol;
+  if (protocol !== "http:" && protocol !== "https:") {
+    return yield* new OpenCodeRuntimeError({
+      operation: "probeOpenCodeServer",
+      detail: "The OpenCode server URL is not a valid http:// or https:// URL.",
+    });
+  }
+  // UTF-8, as the 1.x SDK client sends it; `HttpClientRequest.basicAuth` uses Latin-1 `btoa`.
+  const authorization = serverPassword
+    ? `Basic ${Buffer.from(`opencode:${serverPassword}`, "utf8").toString("base64")}`
+    : undefined;
   for (const path of ["/api/info", "/global/health"] as const) {
     const request = HttpClientRequest.get(`${baseUrl}${path}`);
     const result = yield* client
       .execute(
-        serverPassword ? HttpClientRequest.basicAuth(request, "opencode", serverPassword) : request,
+        authorization
+          ? HttpClientRequest.setHeader(request, "authorization", authorization)
+          : request,
       )
       .pipe(
         Effect.flatMap((response) =>
@@ -120,46 +135,56 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
             }),
           ),
         ),
-        Effect.mapError((cause) =>
-          probeError(openCodeRuntimeErrorDetail(cause.cause ?? cause), cause),
+        Effect.mapError(
+          (cause) =>
+            new OpenCodeRuntimeError({
+              operation: "probeOpenCodeServer",
+              detail: "Couldn't reach the OpenCode server.",
+              cause,
+            }),
         ),
         Effect.timeoutOrElse({
           duration: OPENCODE_SERVER_PROBE_TIMEOUT,
           orElse: () =>
-            Effect.fail(probeError("Timed out while checking the OpenCode server version.")),
+            Effect.fail(
+              new OpenCodeRuntimeError({
+                operation: "probeOpenCodeServer",
+                detail: "Timed out while checking the OpenCode server version.",
+              }),
+            ),
         }),
       );
     if (result === "unauthorized") {
-      return yield* probeError("401 Unauthorized: the OpenCode server rejected the password.");
+      return yield* new OpenCodeRuntimeError({
+        operation: "probeOpenCodeServer",
+        detail: "401 Unauthorized: the OpenCode server rejected the password.",
+      });
     }
     if (result !== undefined) return result;
   }
-  return yield* probeError(
-    `The server did not identify itself as OpenCode. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
-  );
+  return yield* new OpenCodeRuntimeError({
+    operation: "probeOpenCodeServer",
+    detail: `The server did not identify itself as OpenCode. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
+  });
 });
 
 /** Probes a configured server when `serverUrl` is set, otherwise the local binary. */
 export const probeOpenCodeRuntime = (
-  runtime: Pick<OpenCodeRuntimeShape, "runOpenCodeCommand">,
   settings: {
     readonly binaryPath: string;
     readonly serverUrl: string;
     readonly serverPassword: string;
   },
   environment?: NodeJS.ProcessEnv,
-) =>
+): Effect.Effect<ProbedOpenCode, OpenCodeRuntimeError, HttpClient.HttpClient | OpenCodeRuntime> =>
   settings.serverUrl.trim().length > 0
     ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword)
-    : probeOpenCodeBinary(runtime, {
-        binaryPath: settings.binaryPath,
-        ...(environment === undefined ? {} : { environment }),
-      });
+    : probeOpenCodeBinary(settings.binaryPath, environment);
 
 /**
  * One instance's runtime, remembered after the first successful probe. Settings changes rebuild
  * the driver; `refresh` re-probes (status checks use it, so an in-place upgrade re-routes). A
- * failed probe is never remembered.
+ * failed probe is never remembered. `lastSuccess` never probes, for calls too hot to wait on one.
  */
 export const makeOpenCodeRuntimeProbe = <E>(probe: Effect.Effect<ProbedOpenCode, E>) =>
   Effect.map(
@@ -167,5 +192,9 @@ export const makeOpenCodeRuntimeProbe = <E>(probe: Effect.Effect<ProbedOpenCode,
       capacity: 1,
       timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
     }),
-    (cache) => ({ get: Cache.get(cache, undefined), refresh: Cache.refresh(cache, undefined) }),
+    (cache) => ({
+      get: Cache.get(cache, undefined),
+      refresh: Cache.refresh(cache, undefined),
+      lastSuccess: Cache.getSuccess(cache, undefined),
+    }),
   );

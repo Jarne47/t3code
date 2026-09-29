@@ -1,8 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient, HttpClientError } from "effect/unstable/http";
 
-import { OpenCodeRuntimeError, type OpenCodeRuntimeShape } from "./opencodeRuntime.ts";
+import {
+  OpenCodeRuntime,
+  OpenCodeRuntimeError,
+  type OpenCodeRuntimeShape,
+} from "./opencodeRuntime.ts";
 import {
   classifyOpenCodeCliVersion,
   makeOpenCodeRuntimeProbe,
@@ -14,11 +18,16 @@ import {
   replayOpenCodeServer,
 } from "./testFixtures/opencodeProbeResponses.ts";
 
-const external = (serverPassword: string) => ({
-  binaryPath: "opencode",
-  serverUrl: "http://127.0.0.1:4096/",
-  serverPassword,
-});
+const noBinary = {
+  runOpenCodeCommand: () => Effect.die("A configured server must not run the local binary"),
+} as unknown as OpenCodeRuntimeShape;
+
+const probeServer = (serverUrl: string, serverPassword: string, http: HttpClient.HttpClient) =>
+  probeOpenCodeRuntime({ binaryPath: "opencode", serverUrl, serverPassword }).pipe(
+    Effect.provideService(HttpClient.HttpClient, http),
+    Effect.provideService(OpenCodeRuntime, noBinary),
+  );
+const SERVER_URL = "http://127.0.0.1:4096/";
 
 describe("OpenCode version probe", () => {
   it("classifies the recorded `opencode --version` output of both versions", () => {
@@ -36,11 +45,10 @@ describe("OpenCode version probe", () => {
   it.effect("finds 2.x at /api/info without falling through to its HTML /global/health", () =>
     Effect.gen(function* () {
       const paths: Array<string> = [];
-      const probed = yield* probeOpenCodeRuntime({} as OpenCodeRuntimeShape, external("pw")).pipe(
-        Effect.provideService(
-          HttpClient.HttpClient,
-          replayOpenCodeServer(OPENCODE_2_RESPONSES, "pw", paths),
-        ),
+      const probed = yield* probeServer(
+        SERVER_URL,
+        "pw",
+        replayOpenCodeServer(OPENCODE_2_RESPONSES, "pw", paths),
       );
       assert.deepStrictEqual(probed, { generation: "v2", version: "2.0.18" });
       assert.deepStrictEqual(paths, ["/api/info"]);
@@ -50,11 +58,10 @@ describe("OpenCode version probe", () => {
   it.effect("skips the HTML 1.x serves at /api/info and finds it at /global/health", () =>
     Effect.gen(function* () {
       const paths: Array<string> = [];
-      const probed = yield* probeOpenCodeRuntime({} as OpenCodeRuntimeShape, external("pw")).pipe(
-        Effect.provideService(
-          HttpClient.HttpClient,
-          replayOpenCodeServer(OPENCODE_1_RESPONSES, "pw", paths),
-        ),
+      const probed = yield* probeServer(
+        SERVER_URL,
+        "pw",
+        replayOpenCodeServer(OPENCODE_1_RESPONSES, "pw", paths),
       );
       assert.deepStrictEqual(probed, { generation: "v1", version: "1.18.32" });
       assert.deepStrictEqual(paths, ["/api/info", "/global/health"]);
@@ -65,18 +72,70 @@ describe("OpenCode version probe", () => {
     Effect.gen(function* () {
       for (const responses of [OPENCODE_1_RESPONSES, OPENCODE_2_RESPONSES]) {
         const paths: Array<string> = [];
-        const error = yield* probeOpenCodeRuntime(
-          {} as OpenCodeRuntimeShape,
-          external("wrong"),
-        ).pipe(
-          Effect.provideService(
-            HttpClient.HttpClient,
-            replayOpenCodeServer(responses, "pw", paths),
-          ),
-          Effect.flip,
+        const error = yield* Effect.flip(
+          probeServer(SERVER_URL, "wrong", replayOpenCodeServer(responses, "pw", paths)),
         );
         assert.match(error.detail, /401 Unauthorized/);
         assert.deepStrictEqual(paths, ["/api/info"]);
+      }
+    }),
+  );
+
+  it.effect("sends a non-ASCII password as UTF-8, as both versions expect", () =>
+    Effect.gen(function* () {
+      for (const [responses, password, generation] of [
+        [OPENCODE_1_RESPONSES, "pässwörd", "v1"],
+        [OPENCODE_2_RESPONSES, "pass€word", "v2"],
+      ] as const) {
+        const probed = yield* probeServer(
+          SERVER_URL,
+          password,
+          replayOpenCodeServer(responses, password),
+        );
+        assert.strictEqual(probed.generation, generation);
+      }
+    }),
+  );
+
+  it.effect("does not take other JSON at /api/info for OpenCode 2", () =>
+    Effect.gen(function* () {
+      const impostor = {
+        ...OPENCODE_1_RESPONSES,
+        "/api/info": { status: 200, contentType: "application/json", body: '{"version":"3.4.1"}' },
+        "/global/health": OPENCODE_1_RESPONSES["/api/info"],
+      };
+      const error = yield* Effect.flip(
+        probeServer(SERVER_URL, "pw", replayOpenCodeServer(impostor, "pw")),
+      );
+      assert.match(error.detail, /did not identify itself as OpenCode/);
+    }),
+  );
+
+  it.effect("never puts the configured URL or its credentials in an error detail", () =>
+    Effect.gen(function* () {
+      const secret = "userinfo-secret";
+      const unreachable = HttpClient.make((request) =>
+        Effect.die(`should not be reached for ${request.url}`),
+      );
+      // A fetch failure that echoes the full request URL, as Node's does.
+      const refused = HttpClient.make((request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              description: `connect ECONNREFUSED ${request.url}`,
+            }),
+          }),
+        ),
+      );
+      for (const [serverUrl, http] of [
+        [`127.0.0.1:4096?token=${secret}`, unreachable],
+        [`localhost:4096/${secret}`, unreachable],
+        [`http://user:${secret}@10.0.0.1:4096/?token=${secret}`, refused],
+      ] as const) {
+        const error = yield* Effect.flip(probeServer(serverUrl, secret, http));
+        assert.notInclude(error.detail, secret, serverUrl);
+        assert.notInclude(error.detail, "10.0.0.1", serverUrl);
       }
     }),
   );
@@ -85,28 +144,26 @@ describe("OpenCode version probe", () => {
     Effect.gen(function* () {
       const outputs = ["", "opencode v2.0.18\n", "1.18.32\n"];
       let calls = 0;
-      const runtime: Pick<OpenCodeRuntimeShape, "runOpenCodeCommand"> = {
+      const runtime = {
         runOpenCodeCommand: () => {
           const stdout = outputs[calls++];
           return stdout
             ? Effect.succeed({ stdout, stderr: "", code: 0 })
             : Effect.fail(new OpenCodeRuntimeError({ operation: "spawn", detail: "ENOENT" }));
         },
-      };
+      } as unknown as OpenCodeRuntimeShape;
       const probe = yield* makeOpenCodeRuntimeProbe(
-        probeOpenCodeRuntime(runtime, {
-          binaryPath: "opencode",
-          serverUrl: "",
-          serverPassword: "",
-        }).pipe(
+        probeOpenCodeRuntime({ binaryPath: "opencode", serverUrl: "", serverPassword: "" }).pipe(
+          Effect.provideService(OpenCodeRuntime, runtime),
           Effect.provideService(
             HttpClient.HttpClient,
-            replayOpenCodeServer(OPENCODE_2_RESPONSES, ""),
+            HttpClient.make(() => Effect.die("A local binary must not be probed over HTTP")),
           ),
         ),
       );
 
       yield* Effect.flip(probe.get);
+      assert.isTrue((yield* probe.lastSuccess)._tag === "None");
       assert.strictEqual((yield* probe.get).generation, "v2");
       assert.strictEqual((yield* probe.get).generation, "v2");
       assert.strictEqual(calls, 2);

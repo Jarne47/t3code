@@ -334,8 +334,9 @@ const checkProvider = Effect.fn("checkProvider")(function* (
         ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
         ...(environment ? { environment } : {}),
       });
-      const probe = probeOpenCodeRuntime(OpenCodeRuntimeTestDouble, settings, environment).pipe(
+      const probe = probeOpenCodeRuntime(settings, environment).pipe(
         Effect.provideService(HttpClient.HttpClient, server),
+        Effect.provideService(OpenCodeRuntime, OpenCodeRuntimeTestDouble),
       );
       return yield* checkOpenCodeProviderStatus(settings, cwd, probe).pipe(
         Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),

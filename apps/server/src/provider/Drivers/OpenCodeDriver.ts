@@ -12,9 +12,10 @@
  *
  * @module provider/Drivers/OpenCodeDriver
  */
-import { OpenCodeSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { OpenCodeSettings, ProviderDriverKind, TextGenerationError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -34,6 +35,7 @@ import {
   type ProviderAdapterV2Shape,
 } from "../../orchestration-v2/ProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import type { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { readOpenCodeGoUsageLimits } from "../Layers/openCodeUsageLimits.ts";
 import {
@@ -91,47 +93,81 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
   },
 });
 
-/**
- * Routes each adapter call to the runtime the instance's probe detected. Only the 1.x runtime
- * exists so far, so a detected 2.x is refused instead of spoken to in the 1.x protocol. A failed
- * probe keeps the 1.x path, whose own server checks report the failure, and is retried next call.
- */
-function selectOpenCodeRuntimeAdapter(input: {
-  readonly probe: Effect.Effect<ProbedOpenCode, OpenCodeRuntimeError>;
-  readonly v1: ProviderAdapterV2Shape;
-}): ProviderAdapterV2Shape {
-  const unsupported = new OpenCodeRuntimeError({
+const openCode2Unsupported = () =>
+  new OpenCodeRuntimeError({
     operation: "selectOpenCodeRuntime",
     detail: OPENCODE_2_UNSUPPORTED_MESSAGE,
   });
-  const selectV1 = input.probe.pipe(
-    Effect.map((probed) => probed.generation === "v1"),
-    Effect.orElseSucceed(() => true),
+
+type OpenCodeRuntimeProbe = Effect.Success<
+  ReturnType<typeof makeOpenCodeRuntimeProbe<OpenCodeRuntimeError>>
+>;
+
+/**
+ * Runs `use` only when the instance is not 2.x, since only the 1.x runtime exists so far. A failed
+ * probe keeps the 1.x path, whose own server checks report the failure.
+ */
+function onOpenCodeV1<A, E, R, PE>(
+  probed: Effect.Effect<ProbedOpenCode | undefined, PE>,
+  use: Effect.Effect<A, E, R>,
+  refuse: (cause: OpenCodeRuntimeError) => E,
+): Effect.Effect<A, E, R> {
+  return probed.pipe(
+    Effect.orElseSucceed(() => undefined),
+    Effect.flatMap((result) =>
+      result?.generation === "v2" ? Effect.fail(refuse(openCode2Unsupported())) : use,
+    ),
   );
-  const onV1 = <A, E, R>(use: Effect.Effect<A, E, R>, refuse: E) =>
-    Effect.flatMap(selectV1, (isV1) => (isV1 ? use : Effect.fail(refuse)));
+}
+
+/**
+ * Routes each adapter call to the runtime the instance's probe detected. Capability and selection
+ * reads are hot, so they use the last successful probe (1.x before one lands) and never wait on a
+ * slow server. Opening a session waits for a probe, so a 2.x is refused before it is spoken to.
+ */
+function selectOpenCodeRuntimeAdapter(input: {
+  readonly probe: OpenCodeRuntimeProbe;
+  readonly v1: ProviderAdapterV2Shape;
+}): ProviderAdapterV2Shape {
+  const lastSuccess = Effect.map(input.probe.lastSuccess, Option.getOrUndefined);
+  const capabilitiesError = (cause: OpenCodeRuntimeError) =>
+    new ProviderAdapterCapabilitiesError({ driver: DRIVER_KIND, cause });
   return {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
-    getCapabilities: () =>
-      onV1(
-        input.v1.getCapabilities(),
-        new ProviderAdapterCapabilitiesError({ driver: DRIVER_KIND, cause: unsupported }),
-      ),
+    getCapabilities: () => onOpenCodeV1(lastSuccess, input.v1.getCapabilities(), capabilitiesError),
     planSelectionTransition: (transition) =>
-      onV1(
-        input.v1.planSelectionTransition(transition),
-        new ProviderAdapterCapabilitiesError({ driver: DRIVER_KIND, cause: unsupported }),
-      ),
+      onOpenCodeV1(lastSuccess, input.v1.planSelectionTransition(transition), capabilitiesError),
     openSession: (session) =>
-      onV1(
+      onOpenCodeV1(
+        input.probe.get,
         input.v1.openSession(session),
-        new ProviderAdapterOpenSessionError({
-          driver: DRIVER_KIND,
-          providerSessionId: session.providerSessionId,
-          cause: unsupported,
-        }),
+        (cause) =>
+          new ProviderAdapterOpenSessionError({
+            driver: DRIVER_KIND,
+            providerSessionId: session.providerSessionId,
+            cause,
+          }),
       ),
+  };
+}
+
+/** Text generation starts or connects to a server per call, so a 2.x is refused first. */
+function selectOpenCodeRuntimeTextGeneration(
+  probe: OpenCodeRuntimeProbe,
+  v1: TextGeneration["Service"],
+): TextGeneration["Service"] {
+  const refuse = (operation: string) => (cause: OpenCodeRuntimeError) =>
+    new TextGenerationError({ operation, detail: cause.detail, cause });
+  return {
+    generateCommitMessage: (input) =>
+      onOpenCodeV1(probe.get, v1.generateCommitMessage(input), refuse("generateCommitMessage")),
+    generatePrContent: (input) =>
+      onOpenCodeV1(probe.get, v1.generatePrContent(input), refuse("generatePrContent")),
+    generateBranchName: (input) =>
+      onOpenCodeV1(probe.get, v1.generateBranchName(input), refuse("generateBranchName")),
+    generateThreadTitle: (input) =>
+      onOpenCodeV1(probe.get, v1.generateThreadTitle(input), refuse("generateThreadTitle")),
   };
 }
 
@@ -189,8 +225,9 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       );
 
       const runtimeProbe = yield* makeOpenCodeRuntimeProbe(
-        probeOpenCodeRuntime(openCodeRuntime, effectiveConfig, processEnv).pipe(
+        probeOpenCodeRuntime(effectiveConfig, processEnv).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(OpenCodeRuntime, openCodeRuntime),
         ),
       );
       const openCodeV1Adapter = yield* OpenCodeAdapterV2Driver.create({
@@ -212,7 +249,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         ),
       );
       const orchestrationAdapter = selectOpenCodeRuntimeAdapter({
-        probe: runtimeProbe.get,
+        probe: runtimeProbe,
         v1: openCodeV1Adapter,
       });
       const serverOwner = yield* OpenCodeServerOwner.make({
@@ -223,8 +260,11 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
           : {}),
         environment: processEnv,
       });
-      const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig).pipe(
-        Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
+      const textGeneration = selectOpenCodeRuntimeTextGeneration(
+        runtimeProbe,
+        yield* makeOpenCodeTextGeneration(effectiveConfig).pipe(
+          Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
+        ),
       );
 
       const checkProvider = Effect.all(
@@ -352,7 +392,11 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
             ? snapshot.getSnapshot
             : Effect.all([
                 snapshot.getSnapshot,
-                loadWorkspaceForCwd(cwd).pipe(Effect.timeout("20 seconds")),
+                onOpenCodeV1(
+                  runtimeProbe.get,
+                  loadWorkspaceForCwd(cwd).pipe(Effect.timeout("20 seconds")),
+                  (cause) => cause,
+                ),
               ]).pipe(
                 Effect.map(([machineSnapshot, { skills, commands }]) => ({
                   ...machineSnapshot,
