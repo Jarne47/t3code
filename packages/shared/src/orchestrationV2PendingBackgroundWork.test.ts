@@ -3,7 +3,21 @@ import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  turnItemUpdateCanEndBackgroundWork,
 } from "./orchestrationV2PendingBackgroundWork.ts";
+
+describe("turnItemUpdateCanEndBackgroundWork", () => {
+  it.each([
+    ["a finished subagent", true, { type: "subagent", status: "completed" }],
+    ["a failed background command", true, { type: "command_execution", status: "failed" }],
+    ["an idle dynamic tool", true, { type: "dynamic_tool", status: "idle" }],
+    ["a running command's output", false, { type: "command_execution", status: "running" }],
+    ["a waiting subagent", false, { type: "subagent", status: "waiting" }],
+    ["a finished assistant message", false, { type: "assistant_message", status: "completed" }],
+  ] as const)("%s: %s", (_case, canEnd, item) => {
+    expect(turnItemUpdateCanEndBackgroundWork(item)).toBe(canEnd);
+  });
+});
 
 describe("backgroundWorkHoldsCompletion", () => {
   const task = (

@@ -49,6 +49,17 @@ void TERMINAL_RUN_STATUSES;
 export type PendingBackgroundWorkTask = OrchestrationV2PendingBackgroundTask;
 
 /**
+ * Whether a turn-item update can end background work that a settled run is
+ * still waiting on: an item of a background type that is no longer active.
+ * Streaming output on a running item, and every other item type, cannot.
+ */
+export function turnItemUpdateCanEndBackgroundWork(
+  item: Pick<OrchestrationV2TurnItem, "type" | "status">,
+): boolean {
+  return BACKGROUND_TURN_ITEM_TYPES.has(item.type) && !isOrchestrationV2WorkActive(item.status);
+}
+
+/**
  * Whether background work left behind by a completed root run holds back its
  * completion alert (desktop/web notification and the mobile push). Commands,
  * such as dev servers and other long-lived shells, do not: the agent is done
