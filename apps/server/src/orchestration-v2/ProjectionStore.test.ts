@@ -1,5 +1,6 @@
 import { assert, it, vi } from "@effect/vitest";
 import {
+  EnvironmentId,
   EventId,
   CommandId,
   CheckpointId,
@@ -25,6 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -4177,6 +4179,122 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
           ["local", targetThreadId, "command_execution"],
         ],
       );
+    }),
+  );
+
+  it.effect("dates a completion released by held background work at the release", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:held-completion");
+      const runId = RunId.make("run:held-completion");
+      const providerThreadId = ProviderThreadId.make("provider-thread:held-completion");
+      const completedAt = DateTime.makeUnsafe("2026-09-28T12:00:00.000Z");
+      const releasedAt = DateTime.makeUnsafe("2026-09-28T12:05:00.000Z");
+      const providerThread = {
+        id: providerThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId: null,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "idle" as const,
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" as const }],
+        createdAt: completedAt,
+        updatedAt: completedAt,
+      };
+      yield* store.apply({
+        id: EventId.make("event:held-completion:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: completedAt,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:held-completion"),
+          title: "Watch the build",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: completedAt,
+          updatedAt: completedAt,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:held-completion:run"),
+        type: "run.created",
+        threadId,
+        runId,
+        driver,
+        providerInstanceId,
+        occurredAt: completedAt,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId,
+          userMessageId: MessageId.make("message:held-completion"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "completed",
+          requestedAt: completedAt,
+          startedAt: completedAt,
+          completedAt,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:held-completion:monitor-running"),
+        type: "provider-thread.updated",
+        threadId,
+        driver,
+        providerInstanceId,
+        occurredAt: completedAt,
+        payload: providerThread,
+      });
+      const project = { title: "Project" };
+      const environmentId = EnvironmentId.make("environment:held-completion");
+      const held = yield* store.getThreadShell(threadId);
+      assert.equal(
+        held && projectThreadAwarenessV2({ environmentId, project, thread: held })?.phase,
+        "running",
+      );
+
+      // The monitor ends five minutes after the run: the push must not look stale.
+      yield* store.apply({
+        id: EventId.make("event:held-completion:monitor-ended"),
+        type: "provider-thread.updated",
+        threadId,
+        driver,
+        providerInstanceId,
+        occurredAt: releasedAt,
+        payload: { ...providerThread, pendingBackgroundTasks: [], updatedAt: releasedAt },
+      });
+      const released = yield* store.getThreadShell(threadId);
+      const state =
+        released && projectThreadAwarenessV2({ environmentId, project, thread: released });
+      assert.equal(state?.phase, "completed");
+      assert.equal(state?.updatedAt, DateTime.formatIso(releasedAt));
     }),
   );
 });
