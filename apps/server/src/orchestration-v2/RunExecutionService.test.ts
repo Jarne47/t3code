@@ -3209,6 +3209,27 @@ it.effect("leaves a turn the provider accepts under the start bound alone", () =
   }).pipe(Effect.provide(TestClock.layer())),
 );
 
+it.effect("leaves a compaction that outlasts the start bound alone", () =>
+  Effect.gen(function* () {
+    const compactReached = yield* Deferred.make<void>();
+    const fiber = yield* captureRootRunTermination({
+      key: "start-timeout:compaction",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      compactThread: () =>
+        Deferred.succeed(compactReached, undefined).pipe(
+          Effect.andThen(Effect.sleep(Duration.seconds(2))),
+        ),
+      providerStartTimeout: Duration.seconds(1),
+    }).pipe(Effect.forkChild);
+
+    yield* Deferred.await(compactReached);
+    yield* TestClock.adjust("2 seconds");
+    const { written, observed } = yield* Fiber.join(fiber);
+    assert.deepEqual(observed, ["run:interrupted", "pull-requests-refreshed"]);
+    assert.isUndefined(written.find((item) => item.type === "error"));
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
 function captureRootRunTermination(input: {
   readonly key: string;
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, never>;
@@ -3218,6 +3239,7 @@ function captureRootRunTermination(input: {
     ids: BackgroundScenarioIds,
   ) => Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
   readonly startTurn?: ProviderAdapterV2SessionRuntime["startTurn"];
+  readonly compactThread?: ProviderAdapterV2SessionRuntime["compactThread"];
   readonly refreshAfterTurn?: Effect.Effect<void>;
   readonly providerStartTimeout?: Duration.Duration;
 }) {
@@ -3324,6 +3346,7 @@ function captureRootRunTermination(input: {
             close: Deferred.succeed(ingestionDone, undefined),
           }),
           startTurn: input.startTurn ?? (() => Effect.void),
+          ...(input.compactThread === undefined ? {} : { compactThread: input.compactThread }),
         } as unknown as ProviderAdapterV2SessionRuntime,
         run: {
           id: ids.runId,
@@ -3356,7 +3379,7 @@ function captureRootRunTermination(input: {
             }),
         message: {
           messageId: MessageId.make(`message:${input.key}`),
-          text: "interrupt projection",
+          text: input.compactThread === undefined ? "interrupt projection" : "/compact",
           attachments: [],
           createdBy: "user",
           creationSource: "web",

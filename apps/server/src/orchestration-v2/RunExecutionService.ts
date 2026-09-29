@@ -28,6 +28,7 @@ import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import { identity } from "effect/Function";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -1390,7 +1391,11 @@ export const layer: Layer.Layer<
               ))
             : input.session.startTurn(turnInput);
           yield* startTurn.pipe(
-            boundProviderStartStep(providerStartTimeout, "Provider turn start"),
+            // Compaction can wait on the provider's summary (OpenCode's
+            // session.summarize), so only the effect backstop bounds it.
+            compact
+              ? identity
+              : boundProviderStartStep(providerStartTimeout, "Provider turn start"),
             Effect.catchCause((cause) => {
               const failure = Cause.squash(cause);
               return Effect.logError("orchestration V2 provider turn start failed", {
