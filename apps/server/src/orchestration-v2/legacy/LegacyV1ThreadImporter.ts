@@ -21,6 +21,7 @@ import {
   ThreadPullRequestLink,
   TurnItemId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -126,6 +127,7 @@ const decodeLinkedPullRequest = Schema.decodeUnknownOption(ThreadLinkedPullReque
 const decodeStoredThread = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2AppThreadJson),
 );
+const decodeMessageContext = Schema.decodeUnknownOption(OrchestrationMessageContext);
 
 function parseJson(json: string): unknown {
   try {
@@ -149,6 +151,16 @@ function modelSelectionFor(row: LegacyThreadRow) {
 function attachmentsFor(row: LegacyMessageRow) {
   if (row.attachments_json === null) return [];
   return Option.getOrElse(decodeAttachments(parseJson(row.attachments_json)), () => []);
+}
+
+// A message's context is best-effort, like its attachments: an unreadable
+// context_json (bad JSON, unknown version, or a shape a future migration
+// changed) must never fail the whole import. Drop the context and keep the
+// message rather than letting a single bad row become an unrecoverable
+// Effect defect (see LegacyV1ThreadImporter.test.ts).
+function contextFor(row: LegacyMessageRow): OrchestrationMessageContext | undefined {
+  if (!row.context_json) return undefined;
+  return Option.getOrUndefined(decodeMessageContext(parseJson(row.context_json)));
 }
 
 function linkedPullRequestFor(row: LegacyThreadRow) {
@@ -248,6 +260,7 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
   const createdAt = dateTime(row.created_at);
   const updatedAt = dateTime(row.updated_at);
   const attachments = attachmentsFor(row);
+  const context = contextFor(row);
   const message: OrchestrationV2ConversationMessage = {
     createdBy: row.role === "user" ? "user" : "agent",
     creationSource: "server",
@@ -257,13 +270,7 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
     nodeId: null,
     role: row.role,
     text: row.text,
-    ...(row.context_json
-      ? {
-          context: Schema.decodeUnknownSync(OrchestrationMessageContext)(
-            parseJson(row.context_json),
-          ),
-        }
-      : {}),
+    ...(context !== undefined ? { context } : {}),
     attachments,
     streaming: false,
     createdAt,
@@ -295,13 +302,7 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
           messageId,
           inputIntent: "turn_start",
           text: row.text,
-          ...(row.context_json
-            ? {
-                context: Schema.decodeUnknownSync(OrchestrationMessageContext)(
-                  parseJson(row.context_json),
-                ),
-              }
-            : {}),
+          ...(context !== undefined ? { context } : {}),
           attachments,
         }
       : {
@@ -309,13 +310,7 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
           type: "assistant_message",
           messageId,
           text: row.text,
-          ...(row.context_json
-            ? {
-                context: Schema.decodeUnknownSync(OrchestrationMessageContext)(
-                  parseJson(row.context_json),
-                ),
-              }
-            : {}),
+          ...(context !== undefined ? { context } : {}),
           streaming: false,
         };
   return [
@@ -784,19 +779,24 @@ const make = Effect.gen(function* () {
     let importedThreadCount = 0;
     let importedMessageCount = 0;
     for (const row of rows) {
+      // catchCause (not catch) so a defect from one bad thread -- e.g. an
+      // unreadable context_json that slips past contextFor's own guard, or
+      // any other future unhandled throw -- can never escape to the outer
+      // catchCause and stop hydration for every thread after it.
       const result = yield* ensureTranscript(ThreadId.make(row.thread_id)).pipe(
-        Effect.tapError((error) =>
+        Effect.catchCause((cause) =>
           Effect.logWarning("Failed to hydrate migrated v1 thread transcript", {
             threadId: row.thread_id,
-            cause: error,
-          }),
-        ),
-        Effect.catch(() =>
-          sql`
-            UPDATE orchestration_v2_legacy_imports
-            SET last_error = 'Transcript hydration failed; retry on next open.'
-            WHERE thread_id = ${row.thread_id}
-          `.pipe(
+            cause: Cause.pretty(cause),
+          }).pipe(
+            Effect.andThen(
+              () =>
+                sql`
+                UPDATE orchestration_v2_legacy_imports
+                SET last_error = 'Transcript hydration failed; retry on next open.'
+                WHERE thread_id = ${row.thread_id}
+              `,
+            ),
             Effect.as({ importedThreadCount: 0, importedMessageCount: 0 }),
             Effect.orElseSucceed(() => ({
               importedThreadCount: 0,

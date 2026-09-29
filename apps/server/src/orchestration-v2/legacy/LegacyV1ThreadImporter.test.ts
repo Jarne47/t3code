@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ThreadId } from "@t3tools/contracts";
+import { ComposerContextId, EventId, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -533,6 +533,282 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         ORDER BY sequence
       `;
       assert.deepStrictEqual(eventsAfterRestart, eventsBeforeRetry);
+    }),
+  );
+});
+
+// Each of the following gets its own it.layer(...) call (and so its own
+// freshly-built SqlitePersistenceMemory instance) rather than sharing the
+// block above -- importPendingTranscripts operates over every pending thread
+// in the database, so counting its return value only works against an
+// otherwise-empty database.
+
+it.layer(TestLayer)("LegacyV1ThreadImporter - undecodable context on a preview message", (it) => {
+  it.effect("drops the context and still imports the message", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const importer = yield* LegacyV1ThreadImporter;
+      const projections = yield* ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:legacy-context-preview-bad");
+
+      yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at
+          ) VALUES (
+            'project:legacy-context-preview-bad', 'Legacy project', '/tmp/legacy-context-preview-bad',
+            '[]', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+          )
+        `;
+      yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, created_at, updated_at
+          ) VALUES (
+            ${threadId}, 'project:legacy-context-preview-bad', 'Migrated conversation',
+            '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+          )
+        `;
+      yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, role, text, attachments_json, context_json,
+            is_streaming, created_at, updated_at
+          ) VALUES (
+            'message:preview-bad:1', ${threadId}, 'user', 'Hello', '[]',
+            '{"version":2,"records":[]}', 0,
+            '2026-01-01T01:00:00.000Z', '2026-01-01T01:00:00.000Z'
+          )
+        `;
+
+      // Would previously die (Cause.Die) before ever reaching Effect.mapError.
+      const shellImport = yield* importer.reconcileShells;
+      assert.deepStrictEqual(shellImport, {
+        importedThreadCount: 1,
+        importedMessageCount: 1,
+      });
+
+      const projection = yield* projections.getThreadProjection(threadId);
+      assert.deepStrictEqual(
+        projection.messages.map((message) => message.id),
+        ["message:preview-bad:1"],
+      );
+      assert.equal(projection.messages[0]?.text, "Hello");
+      assert.isUndefined(projection.messages[0]?.context);
+    }),
+  );
+});
+
+it.layer(TestLayer)(
+  "LegacyV1ThreadImporter - undecodable context on an older, non-preview message",
+  (it) => {
+    it.effect("hydrates that thread and later threads without dying", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const importer = yield* LegacyV1ThreadImporter;
+        const projections = yield* ProjectionStoreV2;
+        // Sorts before the good thread id, matching importPendingTranscripts'
+        // ORDER BY shell_imported_at ASC, thread_id ASC -- if a bad row could
+        // still stop the loop, the good thread below would never hydrate.
+        const badThreadId = ThreadId.make("thread:legacy-context-transcript-bad");
+        const goodThreadId = ThreadId.make("thread:legacy-context-transcript-good");
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at
+          ) VALUES (
+            'project:legacy-context-transcript', 'Legacy project',
+            '/tmp/legacy-context-transcript', '[]',
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, created_at, updated_at
+          ) VALUES
+            (${badThreadId}, 'project:legacy-context-transcript', 'Bad thread',
+              '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
+              '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+            (${goodThreadId}, 'project:legacy-context-transcript', 'Good thread',
+              '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
+              '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+        `;
+        // Bad thread: only the OLDER message has undecodable context; the
+        // latest user/assistant pair (the shell preview) is clean.
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, role, text, attachments_json, context_json,
+            is_streaming, created_at, updated_at
+          ) VALUES
+            ('message:bad:1', ${badThreadId}, 'user', 'Old first question', '[]',
+              '{"version":2,"records":[]}', 0,
+              '2026-01-01T01:00:00.000Z', '2026-01-01T01:00:00.000Z'),
+            ('message:bad:2', ${badThreadId}, 'assistant', 'Old first answer', '[]', NULL, 0,
+              '2026-01-01T02:00:00.000Z', '2026-01-01T02:00:00.000Z'),
+            ('message:bad:3', ${badThreadId}, 'user', 'Latest question', '[]', NULL, 0,
+              '2026-01-02T01:00:00.000Z', '2026-01-02T01:00:00.000Z'),
+            ('message:bad:4', ${badThreadId}, 'assistant', 'Latest answer', '[]', NULL, 0,
+              '2026-01-02T02:00:00.000Z', '2026-01-02T02:00:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, role, text, attachments_json, context_json,
+            is_streaming, created_at, updated_at
+          ) VALUES
+            ('message:good:1', ${goodThreadId}, 'user', 'Old good question', '[]', NULL, 0,
+              '2026-01-01T01:00:00.000Z', '2026-01-01T01:00:00.000Z'),
+            ('message:good:2', ${goodThreadId}, 'assistant', 'Old good answer', '[]', NULL, 0,
+              '2026-01-01T02:00:00.000Z', '2026-01-01T02:00:00.000Z')
+        `;
+
+        const shellImport = yield* importer.reconcileShells;
+        assert.equal(shellImport.importedThreadCount, 2);
+
+        const summary = yield* importer.importPendingTranscripts;
+        assert.equal(summary.importedThreadCount, 2);
+
+        const afterRows = yield* sql<{
+          readonly thread_id: string;
+          readonly transcript_imported_at: string | null;
+          readonly last_error: string | null;
+        }>`
+          SELECT thread_id, transcript_imported_at, last_error
+          FROM orchestration_v2_legacy_imports
+          ORDER BY thread_id ASC
+        `;
+        for (const row of afterRows) {
+          assert.isNotNull(row.transcript_imported_at, `${row.thread_id} should have hydrated`);
+          assert.isNull(row.last_error, `${row.thread_id} should have no recorded error`);
+        }
+
+        const badProjection = yield* projections.getThreadProjection(badThreadId);
+        assert.deepStrictEqual(
+          badProjection.messages.map((message) => message.id),
+          ["message:bad:1", "message:bad:2", "message:bad:3", "message:bad:4"],
+        );
+        assert.equal(badProjection.messages[0]?.text, "Old first question");
+        assert.isUndefined(badProjection.messages[0]?.context);
+
+        const goodProjection = yield* projections.getThreadProjection(goodThreadId);
+        assert.deepStrictEqual(
+          goodProjection.messages.map((message) => message.id),
+          ["message:good:1", "message:good:2"],
+        );
+      }),
+    );
+  },
+);
+
+it.layer(TestLayer)("LegacyV1ThreadImporter - malformed context_json shapes", (it) => {
+  it.effect(
+    "treats invalid JSON, a wrong version, and duplicate contextIds all as no context",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const importer = yield* LegacyV1ThreadImporter;
+        const projections = yield* ProjectionStoreV2;
+        const threadId = ThreadId.make("thread:legacy-context-malformed");
+
+        yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES (
+          'project:legacy-context-malformed', 'Legacy project',
+          '/tmp/legacy-context-malformed', '[]',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+        yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, created_at, updated_at
+        ) VALUES (
+          ${threadId}, 'project:legacy-context-malformed', 'Migrated conversation',
+          '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+        yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, role, text, attachments_json, context_json,
+          is_streaming, created_at, updated_at
+        ) VALUES
+          ('message:malformed:1', ${threadId}, 'user', 'Not valid JSON', '[]',
+            'not-json{{{', 0, '2026-01-01T01:00:00.000Z', '2026-01-01T01:00:00.000Z'),
+          ('message:malformed:2', ${threadId}, 'assistant', 'Wrong version', '[]',
+            '{"version":2,"records":[]}', 0,
+            '2026-01-01T02:00:00.000Z', '2026-01-01T02:00:00.000Z'),
+          ('message:malformed:3', ${threadId}, 'user', 'Duplicate context ids', '[]',
+            '{"version":1,"records":[{"version":1,"contextId":"ctx_1","kind":"skill","label":"$a","name":"a"},{"version":1,"contextId":"ctx_1","kind":"skill","label":"$b","name":"b"}]}',
+            0, '2026-01-01T03:00:00.000Z', '2026-01-01T03:00:00.000Z')
+      `;
+
+        const shellImport = yield* importer.reconcileShells;
+        assert.equal(shellImport.importedMessageCount, 1); // shell preview is only the latest pair
+        const summary = yield* importer.importPendingTranscripts;
+        assert.equal(summary.importedThreadCount, 1);
+
+        const projection = yield* projections.getThreadProjection(threadId);
+        assert.deepStrictEqual(
+          projection.messages.map((message) => message.id),
+          ["message:malformed:1", "message:malformed:2", "message:malformed:3"],
+        );
+        for (const message of projection.messages) {
+          assert.isUndefined(message.context, `${message.id} should have no context`);
+        }
+      }),
+  );
+
+  it.effect("preserves a valid context exactly", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const importer = yield* LegacyV1ThreadImporter;
+      const projections = yield* ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:legacy-context-valid");
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES (
+          'project:legacy-context-valid', 'Legacy project', '/tmp/legacy-context-valid',
+          '[]', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, created_at, updated_at
+        ) VALUES (
+          ${threadId}, 'project:legacy-context-valid', 'Migrated conversation',
+          '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, role, text, attachments_json, context_json,
+          is_streaming, created_at, updated_at
+        ) VALUES (
+          'message:valid:1', ${threadId}, 'user', 'Use $pinchtab', '[]',
+          '{"version":1,"records":[{"version":1,"contextId":"ctx_1","kind":"skill","label":"$pinchtab","name":"pinchtab"}]}',
+          0, '2026-01-01T01:00:00.000Z', '2026-01-01T01:00:00.000Z'
+        )
+      `;
+
+      yield* importer.reconcileShells;
+      const projection = yield* projections.getThreadProjection(threadId);
+      assert.deepStrictEqual(projection.messages[0]?.context, {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            contextId: ComposerContextId.make("ctx_1"),
+            kind: "skill",
+            label: "$pinchtab",
+            name: "pinchtab",
+          },
+        ],
+      });
     }),
   );
 });
