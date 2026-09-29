@@ -3,7 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as Redacted from "effect/Redacted";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -22,6 +22,15 @@ export class OpenCode2Client extends Context.Service<
   }
 >()("t3/provider/opencode2/OpenCode2Client") {}
 
+/**
+ * OpenCode decodes Basic credentials as UTF-8. `HttpClientRequest.basicAuth`
+ * encodes them as Latin-1 (`btoa`), which gets non-ASCII passwords rejected.
+ */
+const basicAuthorization = (password: string | Redacted.Redacted) => {
+  const plain = Redacted.isRedacted(password) ? Redacted.value(password) : password;
+  return `Basic ${Buffer.from(`${OPENCODE_USERNAME}:${plain}`, "utf8").toString("base64")}`;
+};
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
@@ -32,7 +41,7 @@ export const make = Effect.gen(function* () {
           HttpClient.HttpClient,
           HttpClient.mapRequest(
             httpClient,
-            HttpClientRequest.basicAuth(OPENCODE_USERNAME, password),
+            HttpClientRequest.setHeader("Authorization", basicAuthorization(password)),
           ),
         ),
       ),

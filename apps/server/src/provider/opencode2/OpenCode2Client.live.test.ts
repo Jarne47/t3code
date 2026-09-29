@@ -8,6 +8,7 @@
  * The turn uses the free `opencode/big-pickle` model.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { AbsolutePath, Location, Model, Provider } from "@opencode/client/effect";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -34,7 +35,8 @@ const startServer = Effect.fn("OpenCode2ClientLive.startServer")(function* (bina
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode2-live-" });
   const directory = path.join(root, "work");
   yield* fs.makeDirectory(directory);
-  const password = Encoding.encodeBase64Url(NodeCrypto.randomBytes(32));
+  // Non-ASCII on purpose: OpenCode decodes Basic credentials as UTF-8.
+  const password = `${Encoding.encodeBase64Url(NodeCrypto.randomBytes(32))}-pässwörd€`;
   const child = yield* spawner.spawn(
     ChildProcess.make(binary, ["serve", "--hostname=127.0.0.1", "--port=0"], {
       cwd: directory,
@@ -92,8 +94,11 @@ describe.runIf(binaryPath !== undefined)("OpenCode2Client live", () => {
 
         const session = yield* client.session.create({
           title: "t3 client live check",
-          location: { directory: server.directory } as never,
-          model: { providerID: "opencode", id: "big-pickle" } as never,
+          location: Location.PublicRef.make({ directory: AbsolutePath.make(server.directory) }),
+          model: Model.Ref.make({
+            providerID: Provider.ID.make("opencode"),
+            id: Model.ID.make("big-pickle"),
+          }),
         });
         const finished = yield* client.event.subscribe().pipe(
           Stream.filter(
