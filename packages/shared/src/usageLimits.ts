@@ -79,6 +79,7 @@ export type LimitPresentations = ReadonlyMap<
   }
 >;
 
+/** Prefer the reported email; use an identical credential when no email is available. */
 function accountKey(
   driver: ServerProvider["driver"],
   email: string | undefined,

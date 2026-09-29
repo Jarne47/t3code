@@ -98,8 +98,9 @@ export const readOpenCodeGoUsageLimits = Effect.fn("readOpenCodeGoUsageLimits")(
     ];
     return {
       ...makeUsageLimits({ checkedAt, windows }),
-      // Go's usage response has no account ID, so identical keys are the only
-      // cross-environment identity we can establish from this probe.
+      // Go's usage response has no account ID. An unkeyed hash matches across
+      // environments without a shared secret. It permits offline guesses, but
+      // Go keys are randomly generated.
       credentialFingerprint: NodeCrypto.createHash("sha256")
         .update("opencode-go\0")
         .update(apiKey)
