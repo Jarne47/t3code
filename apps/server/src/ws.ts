@@ -701,6 +701,12 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           afterSequence,
           throughSequence,
           limit: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
+          // A row whose event_type this build does not know (e.g. after a
+          // downgrade past a row an older build never learned) is skipped and
+          // logged instead of failing the whole subscription. The live tail
+          // below resumes from `highWater`, computed independently of this
+          // replay, so dropping such a row here cannot skip past real work.
+          skipUnknownEventTypes: true,
         })
         .pipe(
           Stream.map((stored) => ({
