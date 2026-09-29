@@ -783,7 +783,7 @@ const make = Effect.gen(function* () {
           (cause) =>
             Effect.logWarning("Failed to hydrate migrated v1 thread transcript", {
               threadId: row.thread_id,
-              cause: Cause.pretty(cause),
+              cause,
             }).pipe(
               Effect.andThen(
                 () =>
