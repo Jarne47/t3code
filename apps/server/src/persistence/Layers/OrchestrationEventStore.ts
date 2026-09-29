@@ -432,7 +432,7 @@ const makeEventStore = Effect.gen(function* () {
             Effect.logWarning("Skipping an application event row with an unknown event type", {
               threadId: row.stream_id,
               sequence: row.sequence,
-              eventType: row.event_type,
+              eventTypeLength: row.event_type.length,
             }).pipe(Effect.as(Result.failVoid))
           : rowToV2StoredEvent(row).pipe(
               Effect.mapError(
