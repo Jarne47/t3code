@@ -153,11 +153,7 @@ function attachmentsFor(row: LegacyMessageRow) {
   return Option.getOrElse(decodeAttachments(parseJson(row.attachments_json)), () => []);
 }
 
-// A message's context is best-effort, like its attachments: an unreadable
-// context_json (bad JSON, unknown version, or a shape a future migration
-// changed) must never fail the whole import. Drop the context and keep the
-// message rather than letting a single bad row become an unrecoverable
-// Effect defect (see LegacyV1ThreadImporter.test.ts).
+// Best-effort like attachments: an unreadable context drops, the message stays.
 function contextFor(row: LegacyMessageRow): OrchestrationMessageContext | undefined {
   if (!row.context_json) return undefined;
   return Option.getOrUndefined(decodeMessageContext(parseJson(row.context_json)));
@@ -779,30 +775,30 @@ const make = Effect.gen(function* () {
     let importedThreadCount = 0;
     let importedMessageCount = 0;
     for (const row of rows) {
-      // catchCause (not catch) so a defect from one bad thread -- e.g. an
-      // unreadable context_json that slips past contextFor's own guard, or
-      // any other future unhandled throw -- can never escape to the outer
-      // catchCause and stop hydration for every thread after it.
+      // One thread's failure or defect must not stop hydration of the rest;
+      // interruption (shutdown) still propagates.
       const result = yield* ensureTranscript(ThreadId.make(row.thread_id)).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Failed to hydrate migrated v1 thread transcript", {
-            threadId: row.thread_id,
-            cause: Cause.pretty(cause),
-          }).pipe(
-            Effect.andThen(
-              () =>
-                sql`
-                UPDATE orchestration_v2_legacy_imports
-                SET last_error = 'Transcript hydration failed; retry on next open.'
-                WHERE thread_id = ${row.thread_id}
-              `,
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("Failed to hydrate migrated v1 thread transcript", {
+              threadId: row.thread_id,
+              cause: Cause.pretty(cause),
+            }).pipe(
+              Effect.andThen(
+                () =>
+                  sql`
+                    UPDATE orchestration_v2_legacy_imports
+                    SET last_error = 'Transcript hydration failed; retry on next open.'
+                    WHERE thread_id = ${row.thread_id}
+                  `,
+              ),
+              Effect.as({ importedThreadCount: 0, importedMessageCount: 0 }),
+              Effect.orElseSucceed(() => ({
+                importedThreadCount: 0,
+                importedMessageCount: 0,
+              })),
             ),
-            Effect.as({ importedThreadCount: 0, importedMessageCount: 0 }),
-            Effect.orElseSucceed(() => ({
-              importedThreadCount: 0,
-              importedMessageCount: 0,
-            })),
-          ),
         ),
       );
       importedThreadCount += result.importedThreadCount;
