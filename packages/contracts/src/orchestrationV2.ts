@@ -3040,12 +3040,7 @@ const knownDomainEventTypes: ReadonlySet<string> = new Set(
   }),
 );
 
-/**
- * Whether `type` matches a known {@link OrchestrationV2DomainEvent} discriminant
- * in this build. Servers use this to tell a genuinely unknown event type (safe
- * to skip during replay) apart from a known type whose payload fails to decode
- * (a real bug that must still fail).
- */
+/** Whether `type` is an {@link OrchestrationV2DomainEvent} discriminant in this build. */
 export function isKnownOrchestrationV2EventType(type: string): boolean {
   return knownDomainEventTypes.has(type);
 }

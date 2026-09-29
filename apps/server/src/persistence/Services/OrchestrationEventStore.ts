@@ -52,13 +52,9 @@ export interface OrchestrationEventStoreShape {
    * Reads in fixed-size sequence pages until the filtered range is exhausted;
    * `limit` caps the total emitted events across pages.
    *
-   * By default a row whose `event_type` this build does not know fails the
-   * whole read, same as a row with a broken payload. Pass
-   * `skipUnknownEventTypes: true` for a client-facing replay that should
-   * instead skip and log such a row (still failing on a known type with a
-   * broken payload). Only client thread replay should opt in; appends, the
-   * provider ingestor, projection writes, and anything that builds server
-   * state must stay strict.
+   * A row whose `event_type` this build does not know fails the read unless
+   * `skipUnknownEventTypes` is set, which logs and drops it instead. Only
+   * client thread replay opts in; anything that builds server state stays strict.
    */
   readonly readAgentEvents: (input?: {
     readonly afterSequence?: number;

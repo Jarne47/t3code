@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -425,30 +426,21 @@ const makeEventStore = Effect.gen(function* () {
         );
       },
     ).pipe(
-      Stream.mapEffect((row) => {
-        // Only this opt-in replay path tolerates a row whose event_type this
-        // build does not recognize (e.g. after a downgrade past a row an
-        // older build never learned). Every other reader of this store stays
-        // strict: a known type whose payload fails to decode is still a real
-        // bug and must still fail.
-        if (
-          input?.skipUnknownEventTypes === true &&
-          !isKnownOrchestrationV2EventType(row.event_type)
-        ) {
-          return Effect.logWarning(
-            "Skipping a replayed application event row with a type this build does not know",
-            { threadId: row.stream_id, sequence: row.sequence, eventType: row.event_type },
-          ).pipe(Effect.as(Option.none<OrchestrationV2StoredEvent>()));
-        }
-        return rowToV2StoredEvent(row).pipe(
-          Effect.mapError(
-            toPersistenceDecodeError("OrchestrationEventStore.readAgentEvents:decode"),
-          ),
-          Effect.asSome,
-        );
-      }),
-      Stream.filter(Option.isSome),
-      Stream.map((event) => event.value),
+      Stream.filterMapEffect((row) =>
+        input?.skipUnknownEventTypes === true && !isKnownOrchestrationV2EventType(row.event_type)
+          ? // Written by a newer build; a known type with a bad payload still fails.
+            Effect.logWarning("Skipping an application event row with an unknown event type", {
+              threadId: row.stream_id,
+              sequence: row.sequence,
+              eventType: row.event_type,
+            }).pipe(Effect.as(Result.failVoid))
+          : rowToV2StoredEvent(row).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError("OrchestrationEventStore.readAgentEvents:decode"),
+              ),
+              Effect.map(Result.succeed),
+            ),
+      ),
     );
   };
 

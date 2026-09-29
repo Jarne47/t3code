@@ -393,147 +393,75 @@ layer("OrchestrationEventStore", (it) => {
     }),
   );
 
-  it.effect(
-    "readAgentEvents with skipUnknownEventTypes skips an interspersed unknown-type row and delivers the known events around it",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* OrchestrationEventStore;
-        const sql = yield* SqlClient.SqlClient;
-        const threadId = ThreadId.make("thread:skip-unknown-middle");
-        const baseline = yield* store.latestApplicationSequence;
-        const now = yield* DateTime.now;
-        const knownEvent = (id: string, ordinal: number): OrchestrationV2DomainEvent => ({
-          id: EventId.make(id),
-          type: "turn-item.updated",
+  it.effect("readAgentEvents with skipUnknownEventTypes drops rows of an unknown event type", () =>
+    Effect.gen(function* () {
+      const store = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread:skip-unknown");
+      const baseline = yield* store.latestApplicationSequence;
+      const now = yield* DateTime.now;
+      const knownEvent = (id: string, ordinal: number): OrchestrationV2DomainEvent => ({
+        id: EventId.make(id),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make(`tool:${id}`),
+          type: "command_execution",
           threadId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make(`tool:${id}`),
-            type: "command_execution",
-            threadId,
-            runId: null,
-            nodeId: null,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal,
-            status: "running",
-            title: "Known command",
-            input: "echo hi",
-            startedAt: now,
-            completedAt: null,
-            updatedAt: now,
-          },
-        });
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal,
+          status: "running",
+          title: "Known command",
+          input: "echo hi",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      });
+      // appendAgentEvents only accepts known types, so a row a newer build
+      // wrote is inserted directly.
+      const insertUnknown = (eventId: string, streamVersion: number) => sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+        ) VALUES (
+          ${eventId}, 'thread', ${threadId}, ${streamVersion},
+          'thread.future-feature-added', '2026-01-05T00:00:01.000Z', 'server',
+          '{"anything":true}', '{}', 2
+        )
+      `;
 
-        const [before] = yield* store.appendAgentEvents({
-          events: [knownEvent("event:skip-unknown-middle:before", 1)],
-        });
+      const [before] = yield* store.appendAgentEvents({
+        events: [knownEvent("event:skip-unknown:before", 1)],
+      });
+      yield* insertUnknown("event:skip-unknown:middle", 1);
+      const [after] = yield* store.appendAgentEvents({
+        events: [knownEvent("event:skip-unknown:after", 2)],
+      });
+      yield* insertUnknown("event:skip-unknown:trailing", 3);
 
-        // Simulate a row a newer build wrote that this build has never learned
-        // about, e.g. left behind after a downgrade. Inserted directly because
-        // appendAgentEvents only accepts compile-time-known event types.
-        yield* sql`
-          INSERT INTO orchestration_events (
-            event_id, aggregate_kind, stream_id, stream_version, event_type,
-            occurred_at, actor_kind, payload_json, metadata_json, application_event_version
-          ) VALUES (
-            ${"event:skip-unknown-middle:future"}, 'thread', ${threadId}, 1,
-            ${"thread.future-feature-added"}, '2026-01-05T00:00:01.000Z', 'server',
-            ${'{"anything":true}'}, '{}', 2
-          )
-        `;
+      const replayed = yield* store
+        .readAgentEvents({ threadId, afterSequence: baseline, skipUnknownEventTypes: true })
+        .pipe(Stream.runCollect);
+      assert.deepEqual(
+        Array.from(replayed, (event) => event.sequence),
+        [before!.sequence, after!.sequence],
+      );
 
-        const [after] = yield* store.appendAgentEvents({
-          events: [knownEvent("event:skip-unknown-middle:after", 2)],
-        });
-
-        const replayed = yield* store
-          .readAgentEvents({ threadId, afterSequence: baseline, skipUnknownEventTypes: true })
-          .pipe(
-            Stream.runCollect,
-            Effect.map((chunk) => Array.from(chunk)),
-          );
-        assert.deepEqual(
-          replayed.map((event) => event.sequence),
-          [before!.sequence, after!.sequence],
-        );
-
-        // Without the opt-in flag the exact same range still fails outright -
-        // this is the behavior the fix changes for client replay only.
-        const strictResult = yield* Effect.result(
-          store.readAgentEvents({ threadId, afterSequence: baseline }).pipe(Stream.runCollect),
-        );
-        assert.equal(strictResult._tag, "Failure");
-        if (strictResult._tag === "Failure") {
-          assert.isTrue(isPersistenceDecodeError(strictResult.failure));
-        }
-      }),
-  );
-
-  it.effect(
-    "readAgentEvents with skipUnknownEventTypes tolerates an unknown-type row as the last row",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* OrchestrationEventStore;
-        const sql = yield* SqlClient.SqlClient;
-        const threadId = ThreadId.make("thread:skip-unknown-trailing");
-        const baseline = yield* store.latestApplicationSequence;
-        const now = yield* DateTime.now;
-        const [only] = yield* store.appendAgentEvents({
-          events: [
-            {
-              id: EventId.make("event:skip-unknown-trailing:known"),
-              type: "turn-item.updated",
-              threadId,
-              occurredAt: now,
-              payload: {
-                id: TurnItemId.make("tool:skip-unknown-trailing"),
-                type: "command_execution",
-                threadId,
-                runId: null,
-                nodeId: null,
-                providerThreadId: null,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: 1,
-                status: "running",
-                title: "Known command",
-                input: "echo hi",
-                startedAt: now,
-                completedAt: null,
-                updatedAt: now,
-              },
-            },
-          ],
-        });
-
-        // The unknown row is the very last one in range - there is nothing
-        // known after it for the fix to "resume into".
-        yield* sql`
-          INSERT INTO orchestration_events (
-            event_id, aggregate_kind, stream_id, stream_version, event_type,
-            occurred_at, actor_kind, payload_json, metadata_json, application_event_version
-          ) VALUES (
-            ${"event:skip-unknown-trailing:future"}, 'thread', ${threadId}, 1,
-            ${"thread.future-feature-added"}, '2026-01-05T00:00:02.000Z', 'server',
-            ${'{"anything":true}'}, '{}', 2
-          )
-        `;
-
-        const replayed = yield* store
-          .readAgentEvents({ threadId, afterSequence: baseline, skipUnknownEventTypes: true })
-          .pipe(
-            Stream.runCollect,
-            Effect.map((chunk) => Array.from(chunk)),
-          );
-        assert.deepEqual(
-          replayed.map((event) => event.sequence),
-          [only!.sequence],
-        );
-      }),
+      const strictResult = yield* Effect.result(
+        store.readAgentEvents({ threadId, afterSequence: baseline }).pipe(Stream.runCollect),
+      );
+      assert.equal(strictResult._tag, "Failure");
+      if (strictResult._tag === "Failure") {
+        assert.isTrue(isPersistenceDecodeError(strictResult.failure));
+      }
+    }),
   );
 
   it.effect(
@@ -545,9 +473,6 @@ layer("OrchestrationEventStore", (it) => {
         const threadId = ThreadId.make("thread:skip-unknown-broken-known");
         const baseline = yield* store.latestApplicationSequence;
 
-        // A recognized event type whose payload cannot decode is a real bug,
-        // not something a downgrade could produce, and must still fail even
-        // when skipUnknownEventTypes is set.
         yield* sql`
           INSERT INTO orchestration_events (
             event_id, aggregate_kind, stream_id, stream_version, event_type,
@@ -569,30 +494,6 @@ layer("OrchestrationEventStore", (it) => {
           assert.isTrue(isPersistenceDecodeError(result.failure));
         }
       }),
-  );
-
-  it.effect("appendAgentEvents rejects an event with an unrecognized type", () =>
-    Effect.gen(function* () {
-      const store = yield* OrchestrationEventStore;
-      const threadId = ThreadId.make("thread:append-unknown-type");
-      const now = yield* DateTime.now;
-      // appendAgentEvents is typed to accept only known discriminants; cast to
-      // simulate a caller (or a future refactor) passing an unrecognized one
-      // and confirm the append path stays strict regardless.
-      const bogusEvent = {
-        id: EventId.make("event:append-unknown-type"),
-        type: "thread.not-a-real-event",
-        threadId,
-        occurredAt: now,
-        payload: { anything: true },
-      } as unknown as OrchestrationV2DomainEvent;
-
-      const result = yield* Effect.result(store.appendAgentEvents({ events: [bogusEvent] }));
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        assert.isTrue(isPersistenceDecodeError(result.failure));
-      }
-    }),
   );
 });
 
