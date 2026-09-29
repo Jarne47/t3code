@@ -28,6 +28,11 @@ import {
   OpenCodeAdapterV2Driver,
   type OpenCodeAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/OpenCodeAdapterV2.ts";
+import {
+  ProviderAdapterCapabilitiesError,
+  ProviderAdapterOpenSessionError,
+  type ProviderAdapterV2Shape,
+} from "../../orchestration-v2/ProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { readOpenCodeGoUsageLimits } from "../Layers/openCodeUsageLimits.ts";
@@ -38,7 +43,13 @@ import {
   openCodeCommandsToServerProviderSlashCommands,
 } from "../Layers/OpenCodeProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import { OpenCodeRuntime, loadOpenCodeCommands } from "../opencodeRuntime.ts";
+import { OpenCodeRuntime, OpenCodeRuntimeError, loadOpenCodeCommands } from "../opencodeRuntime.ts";
+import {
+  makeOpenCodeRuntimeProbe,
+  OPENCODE_2_UNSUPPORTED_MESSAGE,
+  probeOpenCodeRuntime,
+  type ProbedOpenCode,
+} from "../opencodeVersionProbe.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -79,6 +90,50 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
     isCommandPath: isOpenCodeNativeCommandPath,
   },
 });
+
+/**
+ * Routes each adapter call to the runtime the instance's probe detected. Only the 1.x runtime
+ * exists so far, so a detected 2.x is refused instead of spoken to in the 1.x protocol. A failed
+ * probe keeps the 1.x path, whose own server checks report the failure, and is retried next call.
+ */
+function selectOpenCodeRuntimeAdapter(input: {
+  readonly probe: Effect.Effect<ProbedOpenCode, OpenCodeRuntimeError>;
+  readonly v1: ProviderAdapterV2Shape;
+}): ProviderAdapterV2Shape {
+  const unsupported = new OpenCodeRuntimeError({
+    operation: "selectOpenCodeRuntime",
+    detail: OPENCODE_2_UNSUPPORTED_MESSAGE,
+  });
+  const selectV1 = input.probe.pipe(
+    Effect.map((probed) => probed.generation === "v1"),
+    Effect.orElseSucceed(() => true),
+  );
+  const onV1 = <A, E, R>(use: Effect.Effect<A, E, R>, refuse: E) =>
+    Effect.flatMap(selectV1, (isV1) => (isV1 ? use : Effect.fail(refuse)));
+  return {
+    instanceId: input.v1.instanceId,
+    driver: DRIVER_KIND,
+    getCapabilities: () =>
+      onV1(
+        input.v1.getCapabilities(),
+        new ProviderAdapterCapabilitiesError({ driver: DRIVER_KIND, cause: unsupported }),
+      ),
+    planSelectionTransition: (transition) =>
+      onV1(
+        input.v1.planSelectionTransition(transition),
+        new ProviderAdapterCapabilitiesError({ driver: DRIVER_KIND, cause: unsupported }),
+      ),
+    openSession: (session) =>
+      onV1(
+        input.v1.openSession(session),
+        new ProviderAdapterOpenSessionError({
+          driver: DRIVER_KIND,
+          providerSessionId: session.providerSessionId,
+          cause: unsupported,
+        }),
+      ),
+  };
+}
 
 export type OpenCodeDriverEnv =
   | OpenCodeAdapterV2DriverEnv
@@ -133,7 +188,12 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         ),
       );
 
-      const orchestrationAdapter = yield* OpenCodeAdapterV2Driver.create({
+      const runtimeProbe = yield* makeOpenCodeRuntimeProbe(
+        probeOpenCodeRuntime(openCodeRuntime, effectiveConfig, processEnv).pipe(
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+        ),
+      );
+      const openCodeV1Adapter = yield* OpenCodeAdapterV2Driver.create({
         instanceId,
         displayName,
         accentColor,
@@ -151,6 +211,10 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
             }),
         ),
       );
+      const orchestrationAdapter = selectOpenCodeRuntimeAdapter({
+        probe: runtimeProbe.get,
+        v1: openCodeV1Adapter,
+      });
       const serverOwner = yield* OpenCodeServerOwner.make({
         binaryPath: effectiveConfig.binaryPath,
         directory: serverConfig.cwd,
@@ -165,7 +229,11 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
 
       const checkProvider = Effect.all(
         {
-          provider: checkOpenCodeProviderStatus(effectiveConfig, serverConfig.cwd, processEnv),
+          provider: checkOpenCodeProviderStatus(
+            effectiveConfig,
+            serverConfig.cwd,
+            runtimeProbe.refresh,
+          ),
           usageLimits: readOpenCodeGoUsageLimits({
             enabled: effectiveConfig.enabled,
             serverUrl: effectiveConfig.serverUrl,

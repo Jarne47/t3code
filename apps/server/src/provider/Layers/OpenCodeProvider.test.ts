@@ -26,6 +26,12 @@ import {
 } from "./OpenCodeProvider.ts";
 import type { OpenCodeInventory } from "../opencodeRuntime.ts";
 import { readOpenCodeGoUsageLimits } from "./openCodeUsageLimits.ts";
+import { OPENCODE_2_UNSUPPORTED_MESSAGE, probeOpenCodeRuntime } from "../opencodeVersionProbe.ts";
+import {
+  OPENCODE_1_RESPONSES,
+  OPENCODE_2_RESPONSES,
+  replayOpenCodeServer,
+} from "../testFixtures/opencodeProbeResponses.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
@@ -318,6 +324,7 @@ const checkProvider = Effect.fn("checkProvider")(function* (
   settings: OpenCodeSettings,
   cwd = process.cwd(),
   environment?: NodeJS.ProcessEnv,
+  server = replayOpenCodeServer(OPENCODE_1_RESPONSES, settings.serverPassword),
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -327,7 +334,10 @@ const checkProvider = Effect.fn("checkProvider")(function* (
         ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
         ...(environment ? { environment } : {}),
       });
-      return yield* checkOpenCodeProviderStatus(settings, cwd, environment).pipe(
+      const probe = probeOpenCodeRuntime(OpenCodeRuntimeTestDouble, settings, environment).pipe(
+        Effect.provideService(HttpClient.HttpClient, server),
+      );
+      return yield* checkOpenCodeProviderStatus(settings, cwd, probe).pipe(
         Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
       );
     }),
@@ -516,6 +526,18 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
     }),
   );
 
+  it.effect("refuses a local OpenCode 2 binary before starting a 1.x server for it", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.versionStdout = "opencode v2.0.18\n";
+      const snapshot = yield* checkProvider(makeOpenCodeSettings());
+
+      NodeAssert.equal(snapshot.status, "error");
+      NodeAssert.equal(snapshot.version, "2.0.18");
+      NodeAssert.equal(snapshot.message, OPENCODE_2_UNSUPPORTED_MESSAGE);
+      NodeAssert.equal(runtimeMock.state.sdkClientInputs.length, 0);
+    }),
+  );
+
   it.effect("uses an environment-only password for local inventory", () =>
     Effect.gen(function* () {
       yield* checkProvider(makeOpenCodeSettings(), process.cwd(), {
@@ -576,6 +598,43 @@ it.layer(testLayer)("checkOpenCodeProviderStatus with configured server URL", (i
           directory: process.cwd(),
         },
       ]);
+    }),
+  );
+
+  it.effect("refuses a configured OpenCode 2 server before speaking 1.x to it", () =>
+    Effect.gen(function* () {
+      const settings = makeOpenCodeSettings({
+        serverUrl: "http://127.0.0.1:9999",
+        serverPassword: "secret-password",
+      });
+      const snapshot = yield* checkProvider(
+        settings,
+        process.cwd(),
+        undefined,
+        replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret-password"),
+      );
+
+      NodeAssert.equal(snapshot.status, "error");
+      NodeAssert.equal(snapshot.version, "2.0.18");
+      NodeAssert.equal(snapshot.message, OPENCODE_2_UNSUPPORTED_MESSAGE);
+      NodeAssert.equal(runtimeMock.state.sdkClientInputs.length, 0);
+    }),
+  );
+
+  it.effect("reports a rejected OpenCode 2 password as an auth error, not a version", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkProvider(
+        makeOpenCodeSettings({ serverUrl: "http://127.0.0.1:9999", serverPassword: "wrong" }),
+        process.cwd(),
+        undefined,
+        replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret-password"),
+      );
+
+      NodeAssert.equal(snapshot.status, "error");
+      NodeAssert.equal(
+        snapshot.message,
+        "OpenCode server rejected authentication. Check the server URL and password.",
+      );
     }),
   );
 

@@ -16,7 +16,6 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   nonEmptyTrimmed,
-  parseGenericCliVersion,
   providerModelsFromSettings,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
@@ -25,7 +24,9 @@ import {
   OpenCodeRuntime,
   openCodeRuntimeErrorDetail,
   type OpenCodeInventory,
+  type OpenCodeRuntimeError,
 } from "../opencodeRuntime.ts";
+import { OPENCODE_2_UNSUPPORTED_MESSAGE, type ProbedOpenCode } from "../opencodeVersionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 
@@ -33,7 +34,6 @@ const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;
-const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
   readonly cause?: unknown;
@@ -381,10 +381,15 @@ export const makePendingOpenCodeProvider = (
     });
   });
 
+/**
+ * `probeRuntime` is the driver's memoized version probe: `opencode --version` for a local binary,
+ * the version endpoints for a configured server. The status check refreshes it, so an in-place
+ * upgrade re-routes the instance.
+ */
 export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatus")(function* (
   openCodeSettings: OpenCodeSettings,
   cwd: string,
-  environment?: NodeJS.ProcessEnv,
+  probeRuntime: Effect.Effect<ProbedOpenCode, OpenCodeRuntimeError>,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -392,7 +397,6 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
 > {
   const openCodeRuntime = yield* OpenCodeRuntime;
   const serverOwner = yield* OpenCodeServerOwner.OpenCodeServerOwner;
-  const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const customModels = openCodeSettings.customModels;
   const isExternalServer = openCodeSettings.serverUrl.trim().length > 0;
@@ -441,58 +445,46 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     });
   }
 
-  let version: string | null = null;
-  if (!isExternalServer) {
-    const versionExit = yield* Effect.exit(
-      openCodeRuntime
-        .runOpenCodeCommand({
-          binaryPath: openCodeSettings.binaryPath,
-          args: ["--version"],
-          environment: resolvedEnvironment,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
-          ),
-          Effect.timeoutOrElse({
-            duration: OPENCODE_VERSION_PROBE_TIMEOUT,
-            orElse: () =>
-              Effect.fail(
-                new OpenCodeProbeError({
-                  detail: `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
-                }),
-              ),
-          }),
-        ),
-    );
-    if (versionExit._tag === "Failure") {
-      return fallback(Cause.squash(versionExit.cause));
-    }
-    version = parseGenericCliVersion(versionExit.value.stdout) ?? null;
-
-    if (!version) {
-      return fallback(
-        new Error(
-          `Unable to determine OpenCode version from \`opencode --version\` output. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
-        ),
-        null,
-      );
-    }
-    if (compareSemverVersions(version, MINIMUM_OPENCODE_VERSION) < 0) {
-      return buildServerProvider({
-        presentation: OPENCODE_PRESENTATION,
-        enabled: openCodeSettings.enabled,
-        checkedAt,
-        models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
-        probe: {
-          installed: true,
-          version,
-          status: "error",
-          auth: { status: "unknown" },
-          message: `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
-        },
-      });
-    }
+  const probedExit = yield* Effect.exit(
+    probeRuntime.pipe(
+      Effect.mapError(
+        (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
+      ),
+    ),
+  );
+  if (probedExit._tag === "Failure") return fallback(Cause.squash(probedExit.cause));
+  const probed = probedExit.value;
+  // Temporary until the OpenCode 2 runtime lands: 2.x must never reach the 1.x server path.
+  if (probed.generation === "v2") {
+    return buildServerProvider({
+      presentation: OPENCODE_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
+      probe: {
+        installed: true,
+        version: probed.version,
+        status: "error",
+        auth: { status: "unknown" },
+        message: OPENCODE_2_UNSUPPORTED_MESSAGE,
+      },
+    });
+  }
+  let version: string | null = probed.version;
+  if (compareSemverVersions(probed.version, MINIMUM_OPENCODE_VERSION) < 0) {
+    return buildServerProvider({
+      presentation: OPENCODE_PRESENTATION,
+      enabled: openCodeSettings.enabled,
+      checkedAt,
+      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
+      probe: {
+        installed: true,
+        version: probed.version,
+        status: "error",
+        auth: { status: "unknown" },
+        message: `OpenCode v${probed.version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
+      },
+    });
   }
 
   const loadInventory = (server: {
