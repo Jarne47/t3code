@@ -40,7 +40,31 @@ const isAlive = (pid: number) => {
   }
 };
 
-/** Starts `opencode serve` the way a user would run it themselves; stopped by its PID. */
+/**
+ * Stops a server the test spawned itself: SIGTERM, then SIGKILL if it is still
+ * alive after five seconds. Keyed on the PID captured at spawn, never on a
+ * pattern. Servers T3 spawns are stopped by T3, through the instance scope.
+ */
+const stopByPid = (pid: number) =>
+  Effect.gen(function* () {
+    const signal = (name: NodeJS.Signals) => {
+      try {
+        process.kill(pid, name);
+      } catch {
+        // Already exited.
+      }
+    };
+    signal("SIGTERM");
+    for (let attempt = 0; attempt < 50 && isAlive(pid); attempt++) {
+      yield* Effect.sleep("100 millis");
+    }
+    if (isAlive(pid)) signal("SIGKILL");
+  });
+
+/**
+ * Starts `opencode serve` the way a user would run it themselves. It is stopped
+ * by its PID when the calling scope closes, whether or not the test passed.
+ */
 const startExternalServer = Effect.fn("OpenCode2ServerLive.startExternalServer")(function* (input: {
   readonly environment: NodeJS.ProcessEnv;
   readonly directory: string;
@@ -53,15 +77,7 @@ const startExternalServer = Effect.fn("OpenCode2ServerLive.startExternalServer")
     }),
   );
   const pid = Number(child.pid);
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // Already exited.
-      }
-    }).pipe(Effect.andThen(child.exitCode), Effect.timeout("10 seconds"), Effect.ignore),
-  );
+  yield* Effect.addFinalizer(() => stopByPid(pid));
   const url = yield* child.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -101,8 +117,11 @@ describe.runIf(binaryPath !== undefined)("OpenCode2Server live", () => {
         };
 
         // The instance owns its server: building the layer spawns nothing, and
-        // closing its scope stops whatever it spawned.
-        const instanceScope = yield* Scope.make();
+        // closing its scope stops whatever it spawned. The scope is released
+        // even when an assertion below fails; it is closed early on purpose.
+        const instanceScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+          Scope.close(scope, Exit.void),
+        );
         const server = Context.get(
           yield* Layer.buildWithScope(
             OpenCode2Server.layer({
