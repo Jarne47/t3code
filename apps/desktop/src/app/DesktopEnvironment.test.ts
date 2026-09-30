@@ -40,6 +40,20 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("isolates personal packaged data and browser storage from the official app", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        appVersion: "0.0.44-itamar.20260930.1",
+        isPackaged: true,
+      });
+      assert.equal(environment.baseDir, "/Users/alice/.t3-itamar");
+      assert.equal(environment.stateDir, "/Users/alice/.t3-itamar/userdata");
+      assert.equal(environment.userDataDirName, "t3code-itamar");
+      assert.equal(environment.legacyUserDataDirName, "t3code-itamar");
+      assert.equal(environment.displayName, "T3 Code (Itamar)");
+      assert.equal(environment.appUserModelId, "com.jarne47.t3code");
+    }),
+  );
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

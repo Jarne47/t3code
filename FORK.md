@@ -35,4 +35,12 @@ With a clean working tree on the customization branch:
 
 This merges upstream `main`, installs locked dependencies, runs focused checks, and builds the web client. You can supply an upstream release tag instead of `main`. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
 
-The command does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. There is no scheduled synchronization or custom release feed yet. Official desktop updates replace the official application; they do not preserve this fork's changes. Use the local development shell until a separate packaged application and update channel are set up.
+The command does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. There is no scheduled synchronization or custom release feed yet. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package deliberately has no auto-update feed, so official updates cannot replace the customizations.
+
+## Personal desktop app
+
+The installed macOS app is **T3 Code (Itamar)** in `/Applications`. Its runtime data is in `~/.t3-itamar/userdata`, and its browser profile is in `~/Library/Application Support/t3code-itamar`. The first installation receives a read-only SQLite snapshot of the original history plus attachments, themes, and settings. Later history changes are independent; do not copy the original database over an in-use fork.
+
+Personal packages use versions such as `0.0.44-itamar.20260930.1`. This suffix selects the separate application identity and data defaults and omits the official update feed. Stable/nightly build identities remain unchanged.
+
+For updates, run `./scripts/fork-update.sh`, then `./scripts/fork-package.sh`. The latter builds a macOS ZIP under `release/itamar` but does not install or launch it. Quit the personal app before replacing its bundle; the separate data directory is retained. Rust is needed for the resource monitor unless an existing matching binary is cached. The initial Mac build reused the installed official ARM64 monitor, whose source was unchanged by the upstream sync.

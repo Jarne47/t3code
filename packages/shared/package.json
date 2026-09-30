@@ -358,6 +358,10 @@
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"
+    },
+    "./personalDesktopFork": {
+      "types": "./src/personalDesktopFork.ts",
+      "import": "./src/personalDesktopFork.ts"
     }
   },
   "scripts": {

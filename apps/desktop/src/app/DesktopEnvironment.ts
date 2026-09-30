@@ -1,3 +1,4 @@
+import { isPersonalDesktopFork, PERSONAL_DESKTOP_FORK } from "@t3tools/shared/personalDesktopFork";
 import type {
   DesktopAppBranding,
   DesktopAppStageLabel,
@@ -116,7 +117,9 @@ export function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: isPersonalDesktopFork(input.appVersion)
+      ? PERSONAL_DESKTOP_FORK.productName
+      : `${APP_BASE_NAME} (${stageLabel})`,
   };
 }
 
@@ -166,10 +169,16 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
+  const personalFork = isPersonalDesktopFork(input.appVersion);
+  const t3Home = personalFork
+    ? Option.orElse(config.t3Home, () =>
+        Option.some(path.join(homeDirectory, PERSONAL_DESKTOP_FORK.homeDirectoryName)),
+      )
+    : config.t3Home;
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
-    t3Home: config.t3Home,
+    t3Home,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
@@ -186,10 +195,18 @@ const make = Effect.fn("desktop.environment.make")(function* (
     baseDir,
     isDevelopment,
     joinPath: path.join,
-    t3Home: config.t3Home,
+    t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName = personalFork
+    ? PERSONAL_DESKTOP_FORK.userDataDirectoryName
+    : isDevelopment
+      ? "t3code-dev"
+      : "t3code";
+  const legacyUserDataDirName = personalFork
+    ? PERSONAL_DESKTOP_FORK.userDataDirectoryName
+    : isDevelopment
+      ? "T3 Code (Dev)"
+      : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -240,7 +257,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      personalFork
+        ? PERSONAL_DESKTOP_FORK.appId
+        : isDevelopment
+          ? "com.t3tools.t3code.dev"
+          : "com.t3tools.t3code",
     ),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
