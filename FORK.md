@@ -70,3 +70,5 @@ codesign --verify --deep --strict '/Applications/T3 Code (Itamar).app'
 ## Imported conversations
 
 Already-imported Codex and Claude conversations refresh from their linked local transcripts every 30 seconds. New messages append without replacing T3 messages or thread settings. An external follow-up reactivates a settled thread. Refresh waits while T3 is working; it does not discover new sessions in the background. Use the existing import action for new conversations. Like the original importer, refresh reads a bounded recent tail and does not backfill older gaps before the latest T3 message.
+
+Claude's selected 200k window is enforced when its session starts. Changing between 200k and 1M resumes the conversation in a new Claude process on the next idle turn; active work must finish or be stopped first.

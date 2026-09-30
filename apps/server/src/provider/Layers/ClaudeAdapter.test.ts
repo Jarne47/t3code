@@ -175,6 +175,7 @@ function makeHarness(config?: {
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
   readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
   readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
+  readonly freshQueries?: boolean;
 }) {
   const query = new FakeClaudeQuery();
   const queries = [query];
@@ -193,7 +194,8 @@ function makeHarness(config?: {
     ...(config?.getSessionMessages ? { getSessionMessages: config.getSessionMessages } : {}),
     ...(config?.forkSession ? { forkSession: config.forkSession } : {}),
     createQuery: (input) => {
-      if (createInput && config?.getSessionMessages) queries.push(new FakeClaudeQuery());
+      if (createInput && (config?.getSessionMessages || config?.freshQueries))
+        queries.push(new FakeClaudeQuery());
       createInput = input;
       return queries.at(-1)!;
     },
@@ -7499,42 +7501,106 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
-  it.effect("re-sets the Claude model when the effective API model changes", () => {
-    const harness = makeHarness();
+  for (const [window, expected] of [
+    ["standard", "1"],
+    ["expanded", "0"],
+  ] as const) {
+    it.effect(`enforces the selected ${window} context window at Claude startup`, () => {
+      const harness = makeHarness({
+        environment: { CLAUDE_CODE_DISABLE_1M_CONTEXT: expected === "1" ? "0" : "1" },
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+            [{ id: "contextWindow", value: window }],
+          ),
+        });
+        assert.equal(
+          harness.getLastCreateQueryInput()?.options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT,
+          expected,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    });
+  }
+
+  it.effect("resumes Claude with the selected context window after an idle window change", () => {
+    const harness = makeHarness({ freshQueries: true });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-
-      const session = yield* adapter.startSession({
+      const selection = (window: string) =>
+        createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+          [{ id: "contextWindow", value: window }],
+        );
+      yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: ProviderDriverKind.make("claudeAgent"),
         runtimeMode: "full-access",
+        modelSelection: selection("expanded"),
       });
-
+      yield* sendCompletedClaudeTurn(adapter, harness, THREAD_ID, "first turn");
+      const before = (yield* adapter.listSessions())[0]!;
       yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        modelSelection: createModelSelection(
-          ProviderInstanceId.make("claudeAgent"),
-          SYNTHETIC_CLAUDE_CAPABLE_MODEL,
-          [{ id: "contextWindow", value: "expanded" }],
-        ),
+        threadId: THREAD_ID,
+        input: "switch to 200k",
+        modelSelection: selection("standard"),
         attachments: [],
       });
+      assert.equal(harness.queries.length, 2);
+      assert.equal(harness.query.closeCalls, 1);
+      const options = harness.getLastCreateQueryInput()!.options;
+      assert.equal(options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
+      assert.equal(options.resume, CLAUDE_ORIGINAL_SESSION_ID);
+      assert.equal(options.model, SYNTHETIC_CLAUDE_CAPABLE_MODEL);
+      const after = (yield* adapter.listSessions())[0]!;
+      const decodeCursor = Schema.decodeUnknownEffect(
+        Schema.Struct({
+          resume: Schema.String,
+          turnCount: Schema.Number,
+          turnStartMessageIds: Schema.Array(Schema.String),
+        }),
+      );
+      const previousCursor = yield* decodeCursor(before.resumeCursor);
+      const nextCursor = yield* decodeCursor(after.resumeCursor);
+      assert.equal(nextCursor.resume, previousCursor.resume);
+      assert.equal(nextCursor.turnCount, previousCursor.turnCount + 1);
+      assert.deepEqual(
+        nextCursor.turnStartMessageIds.slice(0, -1),
+        previousCursor.turnStartMessageIds,
+      );
+      assert.equal(after.runtimeMode, "full-access");
+      const blocked = yield* Effect.flip(
+        adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "switch back while busy",
+          modelSelection: selection("expanded"),
+          attachments: [],
+        }),
+      );
+      assert.equal(blocked._tag, "ProviderAdapterValidationError");
+      assert.equal(harness.queries.length, 2);
+      assert.equal(harness.queries[1]!.closeCalls, 0);
+      yield* sendCompletedClaudeTurn(adapter, harness, THREAD_ID, "finish current work");
       yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello again",
-        modelSelection: createModelSelection(
-          ProviderInstanceId.make("claudeAgent"),
-          SYNTHETIC_CLAUDE_CAPABLE_MODEL,
-          [{ id: "contextWindow", value: "standard" }],
-        ),
+        threadId: THREAD_ID,
+        input: "switch back when idle",
+        modelSelection: selection("expanded"),
         attachments: [],
       });
-
-      assert.deepEqual(harness.query.setModelCalls, [
-        `${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded]`,
-        SYNTHETIC_CLAUDE_CAPABLE_MODEL,
-      ]);
+      assert.equal(harness.queries.length, 3);
+      assert.equal(harness.queries[1]!.closeCalls, 1);
+      assert.equal(
+        harness.getLastCreateQueryInput()?.options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT,
+        "0",
+      );
+      assert.equal(harness.getLastCreateQueryInput()?.options.resume, CLAUDE_ORIGINAL_SESSION_ID);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

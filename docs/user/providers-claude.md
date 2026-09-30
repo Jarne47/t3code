@@ -43,6 +43,11 @@ T3 Code uses the Claude configuration on the connected server.
 
 ## Compact long conversations
 
+Choose the context window in the composer's model options. Selecting **200k**
+limits Claude to that window. To change the window on an existing session, wait
+for its current work to finish or stop it first. Your next message resumes the
+conversation with the new window.
+
 Set **Auto-compact after** in the Claude provider settings to an integer between
 `100000` and `1000000`. For example, `300000` asks Claude to summarize at about
 300,000 tokens. This changes when compaction happens, not the model's context

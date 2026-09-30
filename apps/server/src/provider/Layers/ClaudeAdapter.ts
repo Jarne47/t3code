@@ -417,6 +417,8 @@ interface ClaudeSessionContext {
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
   currentApiModelId: string | undefined;
+  /** The process-level setting cannot be changed with query.setModel. */
+  readonly contextWindowDisabled: boolean;
   /** Effective effort for the session's turns; subagents without an explicit
    * effort override inherit this. */
   currentEffort: string | undefined;
@@ -4944,7 +4946,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+        env: McpProviderSession.withAgentDeviceEnvironment(
+          {
+            ...claudeEnvironment,
+            // Bare Opus/Sonnet slugs can still default to 1M. Enforce the
+            // selected limit in the spawned Claude process, not in the meter.
+            ...(initialContextWindow !== undefined
+              ? {
+                  CLAUDE_CODE_DISABLE_1M_CONTEXT: initialContextWindow <= 200_000 ? "1" : "0",
+                }
+              : {}),
+          },
+          mcpSession,
+        ),
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
@@ -5036,6 +5050,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         startedAt,
         basePermissionMode: permissionMode,
         currentApiModelId: apiModelId,
+        contextWindowDisabled:
+          initialContextWindow !== undefined
+            ? initialContextWindow <= 200_000
+            : claudeEnvironment.CLAUDE_CODE_DISABLE_1M_CONTEXT === "1",
         currentEffort: effectiveEffort ?? undefined,
         resumeSessionId: sessionId,
         pendingApprovals,
@@ -5135,7 +5153,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   );
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const context = yield* requireSession(input.threadId);
+    let context = yield* requireSession(input.threadId);
     const modelCatalog = yield* modelCatalogEffect;
     const selectedModel =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
@@ -5144,9 +5162,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const modelSelection = selectedModel
       ? { ...selectedModel, model: resolveClaudeModelSlug(modelCatalog, selectedModel.model) }
       : undefined;
-    if (modelSelection) {
-      context.startInput = { ...context.startInput, modelSelection };
-    }
+    const selectedContextWindow = selectedClaudeContextWindow(modelCatalog, modelSelection);
+    const contextWindowChanged =
+      selectedContextWindow !== undefined &&
+      selectedContextWindow <= 200_000 !== context.contextWindowDisabled;
 
     // A sendTurn while a real turn is running is a steer: the message is
     // queued into the live SDK agent loop and the work continues as the same
@@ -5155,8 +5174,34 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // instead, so they don't block the user's next turn.
     const steeringTurnState =
       context.turnState && context.turnState.synthetic !== true ? context.turnState : null;
+    if (contextWindowChanged && (steeringTurnState !== null || context.liveTaskIds.size > 0)) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "sendTurn",
+        issue:
+          "Wait for the current Claude turn to finish, or stop it, before changing its context window.",
+      });
+    }
     if (context.turnState && steeringTurnState === null) {
       yield* completeTurn(context, "completed");
+    }
+
+    if (contextWindowChanged) {
+      yield* updateResumeCursor(context);
+      const retainedTurns = [...context.turns];
+      const restartInput = {
+        ...context.startInput,
+        modelSelection,
+        runtimeMode: context.session.runtimeMode,
+        resumeCursor: context.session.resumeCursor,
+      };
+      yield* stopSessionInternal(context, { emitExitEvent: false });
+      yield* startSession(restartInput);
+      context = yield* requireSession(input.threadId);
+      context.turns.push(...retainedTurns);
+    }
+    if (modelSelection) {
+      context.startInput = { ...context.startInput, modelSelection };
     }
 
     if (modelSelection?.model) {
