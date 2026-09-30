@@ -35,7 +35,22 @@ With a clean working tree on the customization branch:
 
 This merges upstream `main`, installs locked dependencies, runs focused checks, and builds the web client. You can supply an upstream release tag instead of `main`. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
 
-The command does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. There is no scheduled synchronization or custom release feed yet. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package deliberately has no auto-update feed, so official updates cannot replace the customizations.
+The command first fast-forwards from the private fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package deliberately has no auto-update feed, so official updates cannot replace the customizations.
+
+## Weekly maintenance on this Mac
+
+The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches upstream `main`, merges into the latest private fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `personal/itamar/sidebar-customizations`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
+
+Latest results and command output are in `~/Library/Application Support/t3code-maintenance/latest.json` and `latest.log`. macOS notifications are attempted when updates succeed or need attention, subject to notification settings. The task requires this Mac and your logged-in session; a scheduled run missed during sleep runs on wake, while one missed during shutdown waits for the next Sunday. No changes means no dependency install or tests are needed.
+
+Run now or disable the schedule:
+
+```sh
+launchctl kickstart "gui/$(id -u)/com.itamar.t3code-weekly-maintenance"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.itamar.t3code-weekly-maintenance.plist"
+```
+
+After disabling, remove that plist to prevent registration at the next login. The installed script lives beside the status report; after editing `scripts/fork-maintenance.py`, copy it there to update the scheduled runner.
 
 ## Personal desktop app
 
