@@ -61,7 +61,7 @@ export const SidebarActiveSortOrder = Schema.Literals([
   "manual",
   "updated_at",
   "created_at",
-  "project",
+  "project", // Older fork preference; interpreted as grouping with latest-message sorting.
 ]);
 export type SidebarActiveSortOrder = typeof SidebarActiveSortOrder.Type;
 
@@ -481,6 +481,10 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   sidebarActiveSortOrder: SidebarActiveSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed("manual" as const)),
+  ),
+  sidebarGroupActiveThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  sidebarActiveProjectOrder: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
   ),
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_SORT_ORDER)),
@@ -1678,6 +1682,8 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarActiveSortOrder: Schema.optionalKey(SidebarActiveSortOrder),
+  sidebarGroupActiveThreads: Schema.optionalKey(Schema.Boolean),
+  sidebarActiveProjectOrder: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),

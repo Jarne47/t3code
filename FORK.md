@@ -5,8 +5,8 @@ This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Custom
 ## Sidebar controls
 
 - **Mod+Shift+B** switches between the new sidebar and the legacy project tree. You can also use the layout button beside the sidebar toggle, the command palette, or the existing legacy-sidebar setting. Rebind `sidebar.toggleLayout` in Settings → Keybindings. Mod is Command on macOS and Control elsewhere.
-- The new sidebar's sort menu offers **Manual order**, **Last user message**, **Newest created**, and **Project A–Z**. Project view keeps logical project worktrees together and sorts threads within each project by their last user message. All projects remain visible.
-- Automatic sorting is a desktop/web view preference. It does not rewrite manual positions or change the native mobile app's ordering. Choose Manual order to drag threads; pinning and other thread-menu actions remain available in every view.
+- The new sidebar's sort menu offers **Manual order**, **Last user message**, and **Newest created**, plus an independent **Group by project** switch. With grouping enabled, drag a project header to move its entire group; its order is saved. The selected sort applies inside each group. Logical project worktrees stay together. Keyboard users can focus a header, press Space, move with the arrow keys, and press Space to drop (Escape cancels).
+- Automatic sorting is a desktop/web view preference. It does not rewrite manual positions or change the native mobile app's ordering. Turn grouping off and choose Manual order to drag individual threads; pinning and other thread-menu actions remain available in every view.
 - Pinned threads retain their own order above active threads, with section labels and a subtle theme-aware accent tint.
 
 ## Run locally

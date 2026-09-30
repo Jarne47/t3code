@@ -1,5 +1,6 @@
+import { ActiveProjectGroups } from "./sidebar/ActiveProjectGroups";
 import { SidebarSortMenu } from "./sidebar/SidebarSortMenu";
-import { activeThreadProjectGroup, sortActiveSidebarThreads } from "./sidebar/activeThreadSort";
+import { groupActiveSidebarThreads, sortActiveSidebarThreads } from "./sidebar/activeThreadSort";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
@@ -2185,6 +2186,9 @@ export default function Sidebar() {
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const activeSortOrder = useClientSettings((s) => s.sidebarActiveSortOrder);
+  const groupActiveThreads =
+    useClientSettings((s) => s.sidebarGroupActiveThreads) || activeSortOrder === "project";
+  const activeProjectOrder = useClientSettings((s) => s.sidebarActiveProjectOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2650,7 +2654,10 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortActiveSidebarThreads(active, activeSortOrder, activeProjectGroups);
+    const sortedActive = sortActiveSidebarThreads(active, activeSortOrder, activeProjectGroups, {
+      groupByProject: groupActiveThreads && scopedProjectKeys === null,
+      projectOrder: activeProjectOrder,
+    });
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2688,6 +2695,8 @@ export default function Sidebar() {
     threads,
     activeSortOrder,
     activeProjectGroups,
+    groupActiveThreads,
+    activeProjectOrder,
   ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -4853,6 +4862,7 @@ export default function Sidebar() {
                             key={threadKey}
                             id={threadKey}
                             disabled={
+                              groupActiveThreads ||
                               activeSortOrder !== "manual" ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
@@ -4874,28 +4884,34 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                         />,
                       ];
-                      let previousActiveProject: string | null = null;
+                      let renderedProjectGroups = false;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           const thread = threadByKey.get(item.key)!;
                           if (
                             item.section === "active" &&
-                            activeSortOrder === "project" &&
+                            groupActiveThreads &&
                             scopedProjectKeys === null
                           ) {
-                            const group = activeThreadProjectGroup(thread, activeProjectGroups);
-                            if (group.key !== previousActiveProject) {
+                            if (!renderedProjectGroups) {
                               items.push(
-                                <li
-                                  key={`project:${group.key}`}
-                                  className="mt-3 mb-1 flex list-none items-center gap-2 border-t border-sidebar-border/50 px-2 pt-2 text-xs font-medium text-sidebar-muted-foreground"
-                                >
-                                  <FolderIcon aria-hidden className="size-3.5 shrink-0" />
-                                  <span className="truncate">{group.label}</span>
-                                </li>,
+                                <ActiveProjectGroups
+                                  key="active-project-groups"
+                                  groups={groupActiveSidebarThreads(
+                                    activeThreads,
+                                    activeProjectGroups,
+                                    activeProjectOrder,
+                                  ).map((group) => ({
+                                    ...group,
+                                    children: group.threads.map((row) =>
+                                      renderThreadRowInner(row, "active"),
+                                    ),
+                                  }))}
+                                />,
                               );
-                              previousActiveProject = group.key;
+                              renderedProjectGroups = true;
                             }
+                            continue;
                           }
                           items.push(renderThreadRow(thread, item.section));
                           continue;

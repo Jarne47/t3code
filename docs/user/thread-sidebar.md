@@ -29,7 +29,7 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 On web and desktop, use Mod+Shift+B to switch between the project tree and the new sidebar. The same action is available in the command palette as Switch to legacy sidebar or Switch to new sidebar.
 
-In the new sidebar, use the sort menu to choose manual order, last user message, creation time, or project name. Project sorting keeps all projects visible, groups their active threads, and shows the most recent user messages first within each project. Pinned threads stay above active work in their saved order. These view choices are local to the client; the native mobile app keeps its existing ordering.
+In the new sidebar, use the sort menu to choose manual order, last user message, or creation time. Enable **Group by project** to keep each project’s active threads together, then drag a project header to arrange the groups. The selected sort applies within each project. Group order is saved independently, including when grouping is temporarily turned off. Pinned threads stay above active work in their saved order. These view choices are local to the client; the native mobile app keeps its existing ordering.
 
 Choose Manual order to drag threads again. Switching views preserves your saved manual positions.
 

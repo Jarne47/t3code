@@ -572,6 +572,14 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
+  it("persists independent project grouping and custom group order", () => {
+    expect(decodeClientSettings({}).sidebarGroupActiveThreads).toBe(false);
+    expect(decodeClientSettings({}).sidebarActiveProjectOrder).toEqual([]);
+    const patch = { sidebarGroupActiveThreads: true, sidebarActiveProjectOrder: ["beta", "alpha"] };
+    expect(decodeClientSettingsPatch(patch)).toMatchObject(patch);
+    expect(decodeClientSettings(patch)).toMatchObject(patch);
+    expect(() => decodeClientSettingsPatch({ sidebarActiveProjectOrder: [123] })).toThrow();
+  });
   it("keeps the active sort preference separate from legacy sorting and validates patches", () => {
     expect(decodeClientSettings({}).sidebarActiveSortOrder).toBe("manual");
     for (const mode of ["manual", "updated_at", "created_at", "project"] as const) {

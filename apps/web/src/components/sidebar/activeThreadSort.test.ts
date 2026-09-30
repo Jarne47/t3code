@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { activeThreadProjectGroup, sortActiveSidebarThreads } from "./activeThreadSort";
+import {
+  activeThreadProjectGroup,
+  reorderActiveProjectGroups,
+  sortActiveSidebarThreads,
+} from "./activeThreadSort";
 
 const groups = new Map([
   ["local:a", { key: "alpha", label: "Alpha" }],
@@ -102,5 +106,65 @@ describe("active sidebar sorting", () => {
       "a",
       "b",
     ]);
+  });
+});
+
+describe("active project grouping", () => {
+  const rows = [
+    thread("alpha-old", { activeOrderKey: "a" }),
+    thread("beta", { projectId: "b", activeOrderKey: "b", createdAt: "2026-09-15T00:00:00Z" }),
+    thread("alpha-new", {
+      projectId: "a-worktree",
+      activeOrderKey: "c",
+      createdAt: "2026-09-20T00:00:00Z",
+    }),
+  ];
+  const options = { groupByProject: true, projectOrder: ["beta", "alpha"] };
+
+  it("uses custom project order with either manual or automatic thread sorting", () => {
+    expect(ids(sortActiveSidebarThreads(rows, "manual", groups, options))).toEqual([
+      "beta",
+      "alpha-old",
+      "alpha-new",
+    ]);
+    expect(ids(sortActiveSidebarThreads(rows, "created_at", groups, options))).toEqual([
+      "beta",
+      "alpha-new",
+      "alpha-old",
+    ]);
+    expect(ids(sortActiveSidebarThreads(rows, "manual", groups))).toEqual([
+      "alpha-old",
+      "beta",
+      "alpha-new",
+    ]);
+  });
+
+  it("puts newly appearing groups after the saved order without losing their threads", () => {
+    expect(
+      ids(
+        sortActiveSidebarThreads(rows, "manual", groups, {
+          groupByProject: true,
+          projectOrder: ["missing", "beta"],
+        }),
+      ),
+    ).toEqual(["beta", "alpha-old", "alpha-new"]);
+  });
+
+  it("reorders visible projects while preserving the positions of hidden projects", () => {
+    expect(
+      reorderActiveProjectGroups(
+        ["alpha", "hidden", "beta"],
+        ["alpha", "beta", "new"],
+        "new",
+        "alpha",
+      ),
+    ).toEqual(["new", "hidden", "alpha", "beta"]);
+    expect(reorderActiveProjectGroups([], ["alpha", "beta"], "beta", "alpha")).toEqual([
+      "beta",
+      "alpha",
+    ]);
+    expect(
+      reorderActiveProjectGroups(["alpha", "beta"], ["alpha", "beta"], "missing", "alpha"),
+    ).toEqual(["alpha", "beta"]);
   });
 });
