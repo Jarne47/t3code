@@ -1957,6 +1957,90 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect(
+      "refreshes only known transcripts after the discovery cache and import window become stale",
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const originalMs = Date.parse("2026-08-01T12:00:00.000Z");
+          const refreshedMs = Date.parse("2026-09-30T12:00:00.000Z");
+          yield* TestClock.setTime(originalMs);
+          const claudeHomePath = yield* makeTempDir("t3-refresh-claude-");
+          const codexHomePath = yield* makeTempDir("t3-refresh-codex-");
+          const workspace = yield* makeTempDir("t3-refresh-workspace-");
+          const filePath = path.join(
+            codexHomePath,
+            "sessions",
+            "2026",
+            "08",
+            "01",
+            "rollout-old.jsonl",
+          );
+          const original = [
+            encodeTranscriptRecord({
+              type: "session_meta",
+              payload: { id: "known-session", cwd: workspace },
+            }),
+            encodeTranscriptRecord({
+              type: "event_msg",
+              timestamp: "2026-08-01T12:00:00.000Z",
+              payload: { type: "user_message", message: "Original" },
+            }),
+          ].join("\n");
+          yield* writeTranscript({ filePath, contents: original, mtimeMs: originalMs });
+          yield* Effect.gen(function* () {
+            const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+            const initial = yield* scanner.recentThreads(workspace).pipe(Stream.runCollect);
+            const imported = initial[0];
+            expect(imported?._tag).toBe("Importable");
+            if (imported?._tag !== "Importable") return;
+            yield* TestClock.setTime(refreshedMs);
+            yield* fileSystem.writeFileString(
+              filePath,
+              original +
+                "\n" +
+                encodeTranscriptRecord({
+                  type: "event_msg",
+                  timestamp: "2026-09-30T12:00:00.000Z",
+                  payload: { type: "user_message", message: "External follow-up" },
+                }),
+            );
+            yield* fileSystem.utimes(filePath, refreshedMs / 1000, refreshedMs / 1000);
+            yield* writeTranscript({
+              filePath: path.join(
+                codexHomePath,
+                "sessions",
+                "2026",
+                "09",
+                "30",
+                "rollout-unrelated.jsonl",
+              ),
+              contents: original.replace("known-session", "unrelated-session"),
+              mtimeMs: refreshedMs,
+            });
+            const refreshed = yield* scanner
+              .recentThreads(workspace, [imported.source], { importedOnly: true })
+              .pipe(Stream.runCollect);
+            expect(refreshed).toHaveLength(1);
+            expect(refreshed[0]).toMatchObject({
+              _tag: "Importable",
+              thread: {
+                providerSessionId: "known-session",
+                updatedAt: "2026-09-30T12:00:00.000Z",
+                messages: [{ text: "Original" }, { text: "External follow-up" }],
+              },
+            });
+            const refreshedThread = refreshed[0];
+            if (refreshedThread?._tag !== "Importable") return;
+            const unchanged = yield* scanner
+              .recentThreads(workspace, [refreshedThread.source], { importedOnly: true })
+              .pipe(Stream.runCollect);
+            expect(unchanged).toMatchObject([{ _tag: "AlreadyImported" }]);
+          }).pipe(Effect.provide(makeScannerTestLayer({ claudeHomePath, codexHomePath })));
+        }),
+    );
+
     it.effect("imports visible history from a transcript with an oversized tool record", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;

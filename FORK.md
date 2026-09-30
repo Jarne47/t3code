@@ -66,3 +66,7 @@ The local ZIP is not notarized. After extracting the app into `/Applications`, a
 codesign --force --deep --sign - '/Applications/T3 Code (Itamar).app'
 codesign --verify --deep --strict '/Applications/T3 Code (Itamar).app'
 ```
+
+## Imported conversations
+
+Already-imported Codex and Claude conversations refresh from their linked local transcripts every 30 seconds. New messages append without replacing T3 messages or thread settings. An external follow-up reactivates a settled thread. Refresh waits while T3 is working; it does not discover new sessions in the background. Use the existing import action for new conversations. Like the original importer, refresh reads a bounded recent tail and does not backfill older gaps before the latest T3 message.

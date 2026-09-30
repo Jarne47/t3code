@@ -13,3 +13,7 @@ vp env exec --node 24 -- vp run --filter @t3tools/web typecheck
 
 env -u ELECTRON_RUN_AS_NODE vp env exec --node 24 -- vp test run apps/desktop/src/app/DesktopEnvironment.test.ts scripts/build-desktop-artifact.test.ts
 vp env exec --node 24 -- vp run --filter @t3tools/desktop typecheck
+
+vp env exec --node 24 -- vp test run apps/server/src/project/AgentSessionImporter.test.ts apps/server/src/orchestration/decider.import.test.ts
+vp env exec --node 24 -- vp test run apps/server/src/project/AgentSessionScanner.test.ts -t recentThreads
+vp env exec --node 24 -- vp run --filter t3 typecheck

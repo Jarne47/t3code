@@ -23,14 +23,54 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as NodeCrypto from "node:crypto";
 
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ProviderSessionDirectory from "../provider/Services/ProviderSessionDirectory.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import { latestThreadMessageAt } from "../orchestration/importedHistory.ts";
+
+/** A timestamp boundary avoids importing T3's own provider transcript a second time. */
+function messagesToSync(
+  existing: OrchestrationThread,
+  source: AgentSessionScanner.AgentSessionThread,
+) {
+  const latestAt = Date.parse(latestThreadMessageAt(existing));
+  const signature = (message: { role: string; text: string; createdAt: string }) =>
+    JSON.stringify([message.role, Date.parse(message.createdAt), message.text]);
+  const existingCounts = new Map<string, number>();
+  for (const message of existing.messages) {
+    const key = signature(message);
+    existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1);
+  }
+  const occurrences = new Map<string, number>();
+  return source.messages.flatMap((message) => {
+    const key = signature(message);
+    const occurrence = (occurrences.get(key) ?? 0) + 1;
+    occurrences.set(key, occurrence);
+    if (Date.parse(message.createdAt) < latestAt || occurrence <= (existingCounts.get(key) ?? 0))
+      return [];
+    const digest = NodeCrypto.createHash("sha256")
+      .update(JSON.stringify([key, occurrence]))
+      .digest("hex");
+    return [
+      {
+        messageId: MessageId.make(`${existing.id}:sync:${digest}`),
+        ...message,
+      },
+    ];
+  });
+}
 
 const CLAUDE_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const decodeImportResumeCursor = Schema.decodeUnknownOption(
+  Schema.Struct({
+    threadId: Schema.optional(Schema.String),
+    resume: Schema.optional(Schema.String),
+  }),
+);
 
 class AgentSessionUnresumableSessionError extends Schema.TaggedError<AgentSessionUnresumableSessionError>()(
   "AgentSessionUnresumableSessionError",
@@ -100,6 +140,7 @@ function hasImportBlockingActivity(
 /** Import recent transcript text and persist the cursor needed to resume its provider session. */
 export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(function* (
   input: AgentSessionImportInput,
+  options: { readonly importedOnly?: boolean } = {},
 ) {
   const scanner = yield* AgentSessionScanner.AgentSessionScanner;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
@@ -132,6 +173,7 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
   const threads = scanner.recentThreads(
     workspaceRoot,
     completedSources.map((entry) => entry.source),
+    options,
   );
   const importedThreadIds = new Set<ThreadId>();
   let importedCount = 0;
@@ -169,6 +211,12 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
         `import:${thread.providerInstanceId}:${thread.providerSessionId}`,
       );
       const imported = yield* Effect.gen(function* () {
+        if (
+          options.importedOnly &&
+          !completedSources.some((entry) => entry.threadId === threadId)
+        ) {
+          return false;
+        }
         const provider = ProviderDriverKind.make(thread.source);
         const model = thread.model ?? DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
         const existingThread = yield* snapshots.getThreadDetailById(threadId);
@@ -200,6 +248,43 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
           importedHistoryPresent &&
           Option.isSome(existingBinding)
         ) {
+          const current = existingThread.value;
+          const binding = existingBinding.value;
+          if (
+            current.archivedAt !== null ||
+            current.deletedAt !== null ||
+            binding.provider !== provider ||
+            binding.providerInstanceId !== thread.providerInstanceId ||
+            binding.status === "running" ||
+            binding.status === "starting" ||
+            current.session?.status === "running" ||
+            current.session?.status === "starting" ||
+            current.latestTurn?.state === "running"
+          ) {
+            // Keep the old file fingerprint so an idle refresh can retry later.
+            return true;
+          }
+          const cursor = decodeImportResumeCursor(binding.resumeCursor);
+          const boundSession = Option.isSome(cursor)
+            ? provider === "codex"
+              ? cursor.value.threadId
+              : cursor.value.resume
+            : undefined;
+          if (boundSession !== thread.providerSessionId) {
+            // Record discovery, but never merge the old session into a resumed fork.
+            yield* directory.recordImportedTranscript({ threadId, source: outcome.source });
+            return true;
+          }
+          const messages = messagesToSync(current, thread);
+          if (messages.length > 0) {
+            yield* engine.dispatch({
+              type: "thread.history.sync",
+              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+              threadId,
+              expectedLatestMessageAt: latestThreadMessageAt(current),
+              messages,
+            });
+          }
           yield* directory.recordImportedTranscript({ threadId, source: outcome.source });
           return true;
         }

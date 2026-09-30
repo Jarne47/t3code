@@ -1551,6 +1551,13 @@ const ThreadHistoryImportCommand = Schema.Struct({
   ).check(Schema.isNonEmpty()),
 });
 
+/** Append provider-side follow-ups without starting a provider turn or replacing T3 history. */
+const ThreadHistorySyncCommand = Schema.Struct({
+  ...ThreadHistoryImportCommand.fields,
+  type: Schema.Literal("thread.history.sync"),
+  expectedLatestMessageAt: IsoDateTime,
+});
+
 /**
  * Persists a user message without starting a turn. Used by worktree bootstraps
  * so the send is durable while the worktree is still being prepared; the
@@ -1668,6 +1675,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageReasoningDeltaCommand,
   ThreadMessageReasoningCompleteCommand,
   ThreadHistoryImportCommand,
+  ThreadHistorySyncCommand,
   ThreadMessageUserAppendCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,

@@ -61,6 +61,7 @@ import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import { importRecentAgentThreads } from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import { refreshImportedAgentThreads } from "./AgentSessionSync.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const WORKSPACE_ROOT = "/tmp/project-from-server";
@@ -582,6 +583,252 @@ const integrationLayer = Layer.mergeAll(
 );
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
+  it.effect(
+    "refreshes external follow-ups once, reactivating a settled thread and preserving T3 work",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const projectId = ProjectId.make("project-external-sync");
+        const workspaceRoot = "/tmp/project-external-sync";
+        const original = { ...integrationThread, providerSessionId: "external-sync" };
+        const threadId = ThreadId.make("import:codex:external-sync");
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("create-sync-project"),
+          projectId,
+          title: "Project",
+          workspaceRoot,
+          createdAt: "2026-08-24T09:00:00.000Z",
+        });
+        yield* importRecentAgentThreads({ projectId }).pipe(
+          Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+            scan: Effect.die("unused"),
+            recentThreads: () => Stream.succeed(makeThreadOutcome(original)),
+          }),
+        );
+        yield* engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("rename-sync-thread"),
+          threadId,
+          title: "My title",
+          branch: "my-branch",
+        });
+        yield* engine.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make("sync-runtime-mode"),
+          threadId,
+          runtimeMode: "approval-required",
+          createdAt: "2026-08-24T10:01:00.000Z",
+        });
+        yield* engine.dispatch({
+          type: "thread.message.user.append",
+          commandId: CommandId.make("native-sync-user"),
+          threadId,
+          message: {
+            messageId: MessageId.make("native-user"),
+            text: "T3 follow-up",
+            attachments: [],
+          },
+          createdAt: "2026-08-24T10:02:00.000Z",
+        });
+        yield* engine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: CommandId.make("native-sync-assistant"),
+          threadId,
+          messageId: MessageId.make("native-assistant"),
+          delta: "T3 response",
+          createdAt: "2026-08-24T10:02:01.000Z",
+        });
+        yield* engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.make("native-sync-complete"),
+          threadId,
+          messageId: MessageId.make("native-assistant"),
+          createdAt: "2026-08-24T10:03:00.000Z",
+        });
+        yield* TestClock.setTime(Date.parse("2026-08-24T10:04:30.000Z"));
+        yield* engine.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("settle-before-external"),
+          threadId,
+        });
+        const bindingBefore = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const external = {
+          ...original,
+          messages: [
+            ...integrationThread.messages,
+            { role: "user" as const, text: "T3 follow-up", createdAt: "2026-08-24T10:02:00.010Z" },
+            {
+              role: "assistant" as const,
+              text: "T3 response",
+              createdAt: "2026-08-24T10:02:59.000Z",
+            },
+            {
+              role: "user" as const,
+              text: "Continue in Codex",
+              createdAt: "2026-08-24T10:05:00.000Z",
+            },
+            {
+              role: "assistant" as const,
+              text: "External answer",
+              createdAt: "2026-08-24T10:06:00.000Z",
+            },
+          ],
+        };
+        const scanner = AgentSessionScanner.AgentSessionScanner.of({
+          scan: Effect.die("background refresh must not rediscover projects"),
+          recentThreads: (root, _sources, options) => {
+            if (root !== workspaceRoot) return Stream.empty;
+            expect(options).toEqual({ importedOnly: true });
+            return Stream.succeed(makeThreadOutcome(external));
+          },
+        });
+        const refresh = refreshImportedAgentThreads().pipe(
+          Effect.provideService(AgentSessionScanner.AgentSessionScanner, scanner),
+        );
+        yield* refresh;
+        yield* refresh;
+        const thread = Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId));
+        expect(thread.messages.map((message) => message.text)).toEqual([
+          ...integrationThread.messages.map((message) => message.text),
+          "T3 follow-up",
+          "T3 response",
+          "Continue in Codex",
+          "External answer",
+        ]);
+        expect(thread).toMatchObject({
+          title: "My title",
+          branch: "my-branch",
+          runtimeMode: "approval-required",
+          settledOverride: "active",
+          settledAt: null,
+          latestTurn: null,
+        });
+        expect(
+          thread.messages.slice(-2).every((message) => message.id.startsWith(`${threadId}:sync:`)),
+        ).toBe(true);
+        expect(Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor).toEqual(
+          bindingBefore.resumeCursor,
+        );
+        // A shifted bounded tail and a repeated prompt must keep distinct IDs.
+        external.messages = [
+          external.messages[0]!,
+          ...external.messages.slice(4),
+          {
+            role: "user",
+            text: "Continue in Codex",
+            createdAt: "2026-08-24T10:07:00.000Z",
+          },
+        ];
+        yield* refresh;
+        yield* refresh;
+        const shifted = Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId));
+        expect(shifted.messages).toHaveLength(integrationThread.messages.length + 5);
+        expect(
+          shifted.messages.filter((message) => message.text === "Continue in Codex"),
+        ).toHaveLength(2);
+        yield* engine.dispatch({
+          type: "thread.pin",
+          commandId: CommandId.make("pin-synced-thread"),
+          threadId,
+          orderKey: "a0",
+        });
+        const pinnedBefore = Option.getOrThrow(
+          yield* snapshots.getThreadDetailById(threadId),
+        ).pinnedAt;
+        yield* refresh;
+        expect(Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId))).toMatchObject({
+          pinnedAt: pinnedBefore,
+          pinOrderKey: "a0",
+          settledOverride: "active",
+        });
+      }),
+  );
+
+  it.effect(
+    "defers a refresh when live work arrives after its snapshot, without advancing the source fingerprint",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const projectId = ProjectId.make("project-external-sync-race");
+        const workspaceRoot = "/tmp/project-external-sync-race";
+        const original = { ...integrationThread, providerSessionId: "external-sync-race" };
+        const threadId = ThreadId.make("import:codex:external-sync-race");
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("create-sync-race-project"),
+          projectId,
+          title: "Project",
+          workspaceRoot,
+          createdAt: "2026-08-24T09:00:00.000Z",
+        });
+        yield* importRecentAgentThreads({ projectId }).pipe(
+          Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+            scan: Effect.die("unused"),
+            recentThreads: () => Stream.succeed(makeThreadOutcome(original)),
+          }),
+        );
+        let recorded = false;
+        const scanner = AgentSessionScanner.AgentSessionScanner.of({
+          scan: Effect.die("unused"),
+          recentThreads: () =>
+            Stream.succeed(
+              makeThreadOutcome({
+                ...original,
+                messages: [
+                  ...integrationThread.messages,
+                  {
+                    role: "user",
+                    text: "External follow-up",
+                    createdAt: "2026-08-24T10:04:00.000Z",
+                  },
+                ],
+              }),
+            ),
+        });
+        const racingEngine = OrchestrationEngine.OrchestrationEngineService.of({
+          ...engine,
+          dispatch: (command) =>
+            Effect.gen(function* () {
+              if (command.type === "thread.history.sync") {
+                yield* engine.dispatch({
+                  type: "thread.message.user.append",
+                  commandId: CommandId.make("raced-user-message"),
+                  threadId,
+                  message: {
+                    messageId: MessageId.make("raced-user"),
+                    text: "Live work",
+                    attachments: [],
+                  },
+                  createdAt: "2026-08-24T10:05:00.000Z",
+                });
+              }
+              return yield* engine.dispatch(command);
+            }),
+        });
+        const result = yield* importRecentAgentThreads({ projectId }).pipe(
+          Effect.provideService(AgentSessionScanner.AgentSessionScanner, scanner),
+          Effect.provideService(OrchestrationEngine.OrchestrationEngineService, racingEngine),
+          Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, {
+            ...directory,
+            recordImportedTranscript: () =>
+              Effect.sync(() => {
+                recorded = true;
+              }),
+          }),
+        );
+        expect(result).toEqual({ importedCount: 0, skippedCount: 1 });
+        expect(recorded).toBe(false);
+        const messages = Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId)).messages;
+        expect(messages.at(-1)?.text).toBe("Live work");
+        expect(messages.some((message) => message.text === "External follow-up")).toBe(false);
+      }),
+  );
+
   it.effect("imports once after the real engine persists an old rejected receipt", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngine.OrchestrationEngineService;

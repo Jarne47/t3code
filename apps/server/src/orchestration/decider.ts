@@ -46,6 +46,7 @@ import {
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import { latestThreadMessageAt } from "./importedHistory.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -1998,6 +1999,91 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.history.sync": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        !thread.messages.some((message) => isImportedAgentSessionMessageId(message.id)) ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running" ||
+        thread.latestTurn?.state === "running" ||
+        openRequests(thread).size > 0 ||
+        latestThreadMessageAt(thread) !== command.expectedLatestMessageAt
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' changed or is busy; retry its history refresh later.`,
+        });
+      }
+      const existingIds = new Set(thread.messages.map((message) => message.id));
+      const messages = command.messages.filter((message) => {
+        if (existingIds.has(message.messageId)) return false;
+        existingIds.add(message.messageId);
+        return true;
+      });
+      const events: Array<PlannedOrchestrationEvent> = [];
+      for (const message of messages) {
+        if (
+          !message.messageId.startsWith(`${command.threadId}:sync:`) ||
+          compareDateTimeStrings(message.createdAt, command.expectedLatestMessageAt) < 0
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "History refresh must append new imported messages after the existing history.",
+          });
+        }
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: message.createdAt,
+            commandId: command.commandId,
+            metadata: { historyImport: true },
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: message.messageId,
+            role: message.role,
+            text: message.text,
+            turnId: null,
+            streaming: false,
+            createdAt: message.createdAt,
+            updatedAt: message.createdAt,
+          },
+        });
+      }
+      const newUserMessages = messages.filter(
+        (message) =>
+          message.role === "user" &&
+          (thread.settledAt === null ||
+            compareDateTimeStrings(message.createdAt, thread.settledAt) > 0),
+      );
+      if (thread.settledOverride === "settled" && newUserMessages.length > 0) {
+        const updatedAt = messages.reduce(
+          (latest, message) =>
+            compareDateTimeStrings(message.createdAt, latest) > 0 ? message.createdAt : latest,
+          command.expectedLatestMessageAt,
+        );
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: updatedAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsettled",
+          // The external user re-engaged this thread. Keep it active until the
+          // user settles it or a T3 turn resumes, like an explicit Un-settle.
+          payload: { threadId: command.threadId, reason: "user", updatedAt },
+        });
+      }
+      return events;
     }
 
     case "thread.history.import": {

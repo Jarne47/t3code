@@ -192,6 +192,7 @@ export class AgentSessionScanner extends Context.Service<
     readonly recentThreads: (
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
+      options?: { readonly importedOnly?: boolean },
     ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
   }
 >()("t3/project/AgentSessionScanner") {}
@@ -1328,6 +1329,7 @@ export const make = Effect.gen(function* () {
   const prepareRecentThreads = Effect.fn("AgentSessionScanner.prepareRecentThreads")(function* (
     workspaceRoot: string,
     completedSources: ReadonlyArray<AgentSessionImportSource>,
+    importedOnly: boolean,
   ) {
     const root = path.resolve(expandHomePath(workspaceRoot));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
@@ -1336,8 +1338,19 @@ export const make = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
-    const candidates = cachedCandidates ?? (yield* collectCandidates()).candidates;
-    cachedCandidates = candidates;
+    // Background refresh stats only known transcripts, without rescanning homes
+    // or dropping an old imported session outside the onboarding time window.
+    const candidates: ReadonlyArray<RawCandidate> = importedOnly
+      ? completedSources.map((source) => ({
+          cwd: root,
+          source: source.provider,
+          providerInstanceId: source.providerInstanceId,
+          threadCount: 1,
+          lastActiveAtMs: source.mtimeMs,
+          transcripts: [{ filePath: source.filePath, mtimeMs: source.mtimeMs ?? nowMs }],
+        }))
+      : (cachedCandidates ?? (yield* collectCandidates()).candidates);
+    if (!importedOnly) cachedCandidates = candidates;
 
     const eligibleTranscripts: Array<{
       readonly candidate: RawCandidate;
@@ -1351,15 +1364,16 @@ export const make = Effect.gen(function* () {
 
       for (const transcript of candidate.transcripts) {
         if (
-          transcript.mtimeMs === null ||
-          transcript.mtimeMs < cutoffMs ||
-          transcript.mtimeMs > nowMs
+          !importedOnly &&
+          (transcript.mtimeMs === null ||
+            transcript.mtimeMs < cutoffMs ||
+            transcript.mtimeMs > nowMs)
         ) {
           continue;
         }
         eligibleTranscripts.push({
           candidate,
-          transcript: { ...transcript, mtimeMs: transcript.mtimeMs },
+          transcript: { ...transcript, mtimeMs: transcript.mtimeMs ?? nowMs },
         });
       }
     }
@@ -1453,7 +1467,7 @@ export const make = Effect.gen(function* () {
               source: candidate.source,
               providerInstanceId: candidate.providerInstanceId,
               fallbackSessionId: path.basename(transcript.filePath, ".jsonl"),
-              lastActiveAtMs: transcript.mtimeMs,
+              lastActiveAtMs: identity.mtimeMs ?? transcript.mtimeMs,
             },
             snapshot.records,
           );
@@ -1487,7 +1501,11 @@ export const make = Effect.gen(function* () {
   const recentThreads: AgentSessionScanner["Service"]["recentThreads"] = (
     workspaceRoot,
     completedSources = [],
-  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources));
+    options = {},
+  ) =>
+    Stream.unwrap(
+      prepareRecentThreads(workspaceRoot, completedSources, options.importedOnly === true),
+    );
 
   return AgentSessionScanner.of({ scan, recentThreads });
 });
