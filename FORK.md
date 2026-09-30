@@ -44,3 +44,10 @@ The installed macOS app is **T3 Code (Itamar)** in `/Applications`. Its runtime 
 Personal packages use versions such as `0.0.44-itamar.20260930.1`. This suffix selects the separate application identity and data defaults and omits the official update feed. Stable/nightly build identities remain unchanged.
 
 For updates, run `./scripts/fork-update.sh`, then `./scripts/fork-package.sh`. The latter builds a macOS ZIP under `release/itamar` but does not install or launch it. Quit the personal app before replacing its bundle; the separate data directory is retained. Rust is needed for the resource monitor unless an existing matching binary is cached. The initial Mac build reused the installed official ARM64 monitor, whose source was unchanged by the upstream sync.
+
+The local ZIP is not notarized. After extracting the app into `/Applications`, apply and verify a local ad-hoc signature before launching:
+
+```sh
+codesign --force --deep --sign - '/Applications/T3 Code (Itamar).app'
+codesign --verify --deep --strict '/Applications/T3 Code (Itamar).app'
+```
