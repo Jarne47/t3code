@@ -36,10 +36,12 @@ def maintain(repo, state):
 
             try:
                 branch = "itamar/sidebar-customizations"
-                run("git", "fetch", "personal", branch)
-                base = run("git", "rev-parse", "FETCH_HEAD", capture=True)
-                run("git", "fetch", "upstream", "main")
-                upstream = run("git", "rev-parse", "FETCH_HEAD", capture=True)
+                personal_ref = f"refs/remotes/personal/{branch}"
+                upstream_ref = "refs/remotes/upstream/main"
+                run("git", "fetch", "personal", f"refs/heads/{branch}:{personal_ref}")
+                base = run("git", "rev-parse", personal_ref, capture=True)
+                run("git", "fetch", "upstream", f"refs/heads/main:{upstream_ref}")
+                upstream = run("git", "rev-parse", upstream_ref, capture=True)
                 result.update(base=base, upstream=upstream)
                 pending = run("git", "rev-list", "--count", f"{base}..{upstream}", capture=True)
                 if pending == "0":
@@ -48,7 +50,7 @@ def maintain(repo, state):
                     # This directory belongs only to this invocation, never the user's checkout.
                     with tempfile.TemporaryDirectory(prefix="candidate-", dir=state) as temporary:
                         candidate = Path(temporary) / "repo"
-                        run("git", "worktree", "add", "--detach", str(candidate), base)
+                        run("git", "worktree", "add", "--quiet", "--detach", str(candidate), base)
                         try:
                             run("git", "-c", "core.hooksPath=/dev/null", "merge", "--no-edit", upstream, cwd=candidate)
                             run("vp", "env", "exec", "--node", "24", "--", "vp", "install", "--frozen-lockfile", cwd=candidate)

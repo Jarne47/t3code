@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -95,6 +96,20 @@ class MaintenanceTest(unittest.TestCase):
         self.assertEqual((code, result['status']), (1, 'failed'))
         self.assertEqual(self.remote_tip(), self.base)
         self.assertEqual(len(self.git('worktree', 'list').splitlines()), 1)
+
+    def test_concurrent_remote_update_is_preserved(self):
+        (self.repo / 'fork-only').write_text('new local work\n')
+        self.commit('new local work')
+        local_tip = self.git('rev-parse', 'HEAD')
+        self.advance_upstream()
+        # Simulate another process publishing work while candidate checks run.
+        (self.binary / 'vp').write_text(
+            '#!/bin/sh\ngit -C ' + shlex.quote(str(self.repo)) + ' push personal ' + self.branch + '\n'
+        )
+        code, result = self.run_maintenance()
+        self.assertEqual((code, result['status']), (1, 'failed'))
+        self.assertEqual(self.remote_tip(), local_tip)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), local_tip)
 
     def test_conflict_does_not_push_or_touch_checkout(self):
         (self.repo / 'content').write_text('fork change\n')
