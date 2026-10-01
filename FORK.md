@@ -1,6 +1,40 @@
 # Personal sidebar fork
 
-This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Customizations live on `itamar/sidebar-customizations`; `main` remains an upstream reference. The `personal` remote is the fork and `upstream` is the original repository.
+This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Customizations live on the default branch, `itamar/sidebar-customizations`; `main` remains an upstream reference. The `personal` remote is the fork and `upstream` is the original repository.
+
+## Download
+
+Open [Releases](https://github.com/Jarne47/t3code/releases/latest) and install the same release on both computers:
+
+- **Windows:** `T3-Code-<version>-x64.exe` (Intel/AMD 64-bit, includes the matching WSL backend).
+- **Mac:** `T3-Code-<version>-arm64.zip` (Apple Silicon). Extract **T3 Code (Itamar).app** into Applications.
+
+These personal packages are not signed with Microsoft's or Apple's commercial signing certificates. macOS packages have an ad-hoc signature. They use their own data directory, `~/.t3-itamar`, and do not automatically import nightly history or connections. The personal app has no official auto-update feed.
+
+### Keep your Windows nightly history
+
+Before the personal app's first launch, quit nightly completely. In the installer, leave **Run T3 Code (Itamar)** unchecked. Copy the history and preferences with this PowerShell command. It refuses to replace an existing personal history database; the original nightly files remain in place.
+
+```powershell
+$source = Join-Path $env:USERPROFILE '.t3\userdata'
+$target = Join-Path $env:USERPROFILE '.t3-itamar\userdata'
+if (Test-Path (Join-Path $target 'state.sqlite')) { throw 'Personal history already exists; do not overwrite it.' }
+if (!(Test-Path (Join-Path $source 'state.sqlite'))) { throw 'Nightly history was not found at the default location.' }
+New-Item -ItemType Directory -Path $target -Force | Out-Null
+Get-ChildItem -LiteralPath $source -Filter 'state.sqlite*' | Copy-Item -Destination $target
+foreach ($name in @('client-settings.json', 'settings.json', 'keybindings.json', 'attachments', 'themes')) {
+    $item = Join-Path $source $name
+    if (Test-Path $item) { Copy-Item -LiteralPath $item -Destination $target -Recurse }
+}
+```
+
+Then launch the personal app and sign in to T3 Connect. Its environment registration and browser sign-in are separate from nightly. If your history is stored in WSL or you customized `T3CODE_HOME`, use the actual environment's data location instead of these defaults.
+
+## Connect the computers
+
+On both computers, open **Settings → Connections**, sign in to the same **T3 Connect** account you used in nightly, and enable T3 Connect for the local environment. Select the other computer's environment to work there. Keep both computers running and reachable for access in both directions.
+
+Each environment owns its conversations, project files, terminals, and agent sessions. Connecting gives the other computer access to that environment; it does not merge or copy two independent histories. Installing this build does not transfer Windows nightly history into the new personal environment.
 
 ## Sidebar controls
 
@@ -35,11 +69,11 @@ With a clean working tree on the customization branch:
 
 This merges upstream `main`, installs locked dependencies, runs focused checks, and builds the web client. You can supply an upstream release tag instead of `main`. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
 
-The command first fast-forwards from the private fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package deliberately has no auto-update feed, so official updates cannot replace the customizations.
+The command first fast-forwards from the personal fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package deliberately has no auto-update feed, so official updates cannot replace the customizations.
 
 ## Weekly maintenance on this Mac
 
-The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches upstream `main`, merges into the latest private fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `personal/itamar/sidebar-customizations`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
+The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches upstream `main`, merges into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `personal/itamar/sidebar-customizations`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
 
 Latest results and command output are in `~/Library/Application Support/t3code-maintenance/latest.json` and `latest.log`. macOS notifications are attempted when updates succeed or need attention, subject to notification settings. The task requires this Mac and your logged-in session; a scheduled run missed during sleep runs on wake, while one missed during shutdown waits for the next Sunday. No changes means no dependency install or tests are needed.
 
@@ -66,6 +100,12 @@ The local ZIP is not notarized. After extracting the app into `/Applications`, a
 codesign --force --deep --sign - '/Applications/T3 Code (Itamar).app'
 codesign --verify --deep --strict '/Applications/T3 Code (Itamar).app'
 ```
+
+## Build another matching release
+
+In [this repository](https://github.com/Jarne47/t3code/actions/workflows/build-personal.yml), run **Actions → Build personal desktops → Run workflow** with a full source commit from `Jarne47/t3code` and a unique version such as `0.0.44-itamar.20260930.2`. The workflow builds Mac, Windows, and the Windows WSL backend from that one commit, then publishes a release only after all builds succeed. Release notes record the source commit; `SHA256SUMS` records the download checksums.
+
+The workflow uses the public production configuration from upstream's `.env.example`. It does not package local conversations, sign-in sessions, pairing credentials, or private files.
 
 ## Imported conversations
 

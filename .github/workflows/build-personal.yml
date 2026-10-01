@@ -1,0 +1,214 @@
+name: Build personal desktops
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Full source commit in Jarne47/t3code
+        required: true
+        default: 88e4cc738362fae9f102ea22127b458527eae1f2
+        type: string
+      version:
+        description: Unique personal version (base-itamar.YYYYMMDD.N)
+        required: true
+        default: 0.0.44-itamar.20260930.2
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_REF: ${{ inputs.source_ref }}
+  BUILD_VERSION: ${{ inputs.version }}
+
+jobs:
+  wsl:
+    if: github.repository == 'Jarne47/t3code'
+    name: Matching Linux backend for WSL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-itamar\.[0-9]{8}\.[0-9]+$ ]]
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$SOURCE_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+          cp .env.example .env
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+          cache: false
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
+      - name: Build server and web client
+        run: |
+          node scripts/update-release-package-versions.ts "$BUILD_VERSION"
+          vp run --filter t3 build
+      - name: Build server executable
+        env:
+          VP_NODE_VERSION: 26.8.2
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+      - name: Build resource monitor
+        run: |
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+          mkdir -p cli-resource-monitor/linux-x64
+          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor cli-resource-monitor/linux-x64/
+      - name: Package and verify WSL runtime
+        run: |
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$BUILD_VERSION" --resource-monitor-dir "$PWD/cli-resource-monitor" --output-dir release/personal
+          mkdir smoke
+          tar -xzf "release/personal/t3-$BUILD_VERSION-linux-x64.tar.gz" -C smoke
+          ./smoke/t3-"$BUILD_VERSION"-linux-x64/t3 --version
+      - name: Upload WSL runtime
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wsl-runtime
+          path: release/personal/*.tar.gz
+          if-no-files-found: error
+
+  desktop:
+    name: Desktop ${{ matrix.platform }} ${{ matrix.arch }}
+    needs: wsl
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            platform: win
+            target: nsis
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+          - runner: macos-15
+            platform: mac
+            target: zip
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_PLATFORM: ${{ matrix.platform }}
+      BUILD_TARGET: ${{ matrix.target }}
+      BUILD_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Checkout source
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-itamar\.[0-9]{8}\.[0-9]+$ ]]
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$SOURCE_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+          cp .env.example .env
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+          cache: false
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
+      - name: Install Spectre-mitigated MSVC libraries
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) { throw "Spectre library installation failed" }
+      - name: Download WSL runtime
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wsl-runtime
+          path: wsl-runtime
+      - name: Verify configuration and build desktop
+        run: |
+          set -euo pipefail
+          vp test run scripts/lib/public-config.test.ts apps/web/src/cloud/publicConfig.test.ts apps/web/src/cloud/linkEnvironment.test.ts
+          args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$BUILD_VERSION" --output-dir release/personal --verbose)
+          if [[ "$BUILD_PLATFORM" == win ]]; then
+            args+=(--wsl-runtime "$PWD/wsl-runtime/t3-$BUILD_VERSION-linux-x64.tar.gz")
+          fi
+          node scripts/build-desktop-artifact.ts "${args[@]}"
+      - name: Sign Mac package ad hoc
+        if: matrix.platform == 'mac'
+        run: |
+          set -euo pipefail
+          zip_path="release/personal/T3-Code-$BUILD_VERSION-arm64.zip"
+          ditto -x -k "$zip_path" "$RUNNER_TEMP/personal-app"
+          app_path="$RUNNER_TEMP/personal-app/T3 Code (Itamar).app"
+          codesign --force --deep --sign - "$app_path"
+          codesign --verify --deep --strict "$app_path"
+          rm "$zip_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/personal/*.zip
+            release/personal/*.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish matching release
+    needs: [wsl, desktop]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_REPO: ${{ github.repository }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: downloads
+          merge-multiple: true
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd downloads
+          sha256sum ./*.exe ./*.zip ./*.tar.gz > SHA256SUMS
+          cat > release-notes.md <<EOF
+          Matching Windows x64 and Apple Silicon Mac builds of T3 Code (Itamar).
+
+          Version: $BUILD_VERSION
+          Source: $GITHUB_SERVER_URL/$RELEASE_REPO/commit/$SOURCE_REF
+
+          T3 Connect is enabled in both builds. Windows includes the WSL backend built from the same source and version.
+
+          Install the same release on both computers. In Settings → Connections, sign in to your existing T3 Connect account and enable the local environment's T3 Connect access on each computer.
+
+          These personal builds use a separate ~/.t3-itamar data directory. Existing nightly history is not imported automatically. Windows installers lack a commercial signing certificate; the Mac package is signed ad hoc.
+          EOF
+          gh release create "v$BUILD_VERSION" --repo "$RELEASE_REPO" --target "$SOURCE_REF" --title "T3 Code (Itamar) $BUILD_VERSION" --notes-file release-notes.md ./*.exe ./*.zip ./*.tar.gz SHA256SUMS
