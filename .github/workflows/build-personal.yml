@@ -153,6 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           vp test run scripts/lib/public-config.test.ts apps/web/src/cloud/publicConfig.test.ts apps/web/src/cloud/linkEnvironment.test.ts
+          vp test run apps/web/src/components/sidebar/ActiveProjectGroups.test.tsx apps/web/src/components/ProviderUpdateEnvironmentRows.test.tsx apps/server/src/provider/providerMaintenance.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts apps/desktop/src/app/DesktopUserData.test.ts
           args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$BUILD_VERSION" --output-dir release/personal --verbose)
           if [[ "$BUILD_PLATFORM" == win ]]; then
             args+=(--wsl-runtime "$PWD/wsl-runtime/t3-$BUILD_VERSION-linux-x64.tar.gz")

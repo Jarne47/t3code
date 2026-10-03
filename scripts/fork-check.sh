@@ -7,13 +7,13 @@ cd "$(dirname "$0")/.."
 )
 (
   cd apps/web
-  vp env exec --node 24 -- vp test run --project unit src/components/sidebar/activeThreadSort.test.ts src/keybindings.test.ts src/components/Sidebar.logic.test.ts src/components/Sidebar.drag.test.ts src/components/settings/KeybindingsSettings.logic.test.ts src/components/settings/settingsSearch.test.ts
+  vp env exec --node 24 -- vp test run --project unit src/components/sidebar/activeThreadSort.test.ts src/components/sidebar/ActiveProjectGroups.test.tsx src/keybindings.test.ts src/components/Sidebar.logic.test.ts src/components/Sidebar.drag.test.ts src/components/settings/KeybindingsSettings.logic.test.ts src/components/settings/settingsSearch.test.ts
 )
 vp env exec --node 24 -- vp run --filter @t3tools/web typecheck
 
-env -u ELECTRON_RUN_AS_NODE vp env exec --node 24 -- vp test run apps/desktop/src/app/DesktopEnvironment.test.ts scripts/build-desktop-artifact.test.ts
+env -u ELECTRON_RUN_AS_NODE vp env exec --node 24 -- vp test run apps/desktop/src/app/DesktopEnvironment.test.ts apps/desktop/src/app/DesktopUserData.test.ts scripts/build-desktop-artifact.test.ts
 vp env exec --node 24 -- vp run --filter @t3tools/desktop typecheck
 
-vp env exec --node 24 -- vp test run apps/server/src/project/AgentSessionImporter.test.ts apps/server/src/orchestration/decider.import.test.ts apps/server/src/provider/Layers/ClaudeAdapter.test.ts
+vp env exec --node 24 -- vp test run apps/server/src/project/AgentSessionImporter.test.ts apps/server/src/claudeModelOptions.test.ts apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts apps/server/src/provider/providerMaintenance.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts
 vp env exec --node 24 -- vp test run apps/server/src/project/AgentSessionScanner.test.ts -t recentThreads
 vp env exec --node 24 -- vp run --filter t3 typecheck

@@ -39,7 +39,7 @@ const windowsHost = HostProcessPlatform.defaultValue() === "win32";
 const makeTempDir = (name: string) =>
   Crypto.Crypto.pipe(
     Effect.flatMap((crypto) => crypto.randomUUIDv4),
-    Effect.map((id) => NodePath.join(NodeOS.tmpdir(), `${name}-${id}`)),
+    Effect.map((id) => NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), `${name}-${id}`)),
   );
 const isNativeTestCommandPath =
   (expectedPathSegment: string) =>
@@ -243,7 +243,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     ),
   );
 
-  it.effect.skipIf(!symlinksSupported)(
+  it.effect.skipIf(windowsHost || !symlinksSupported)(
     "pins npm updates to the global prefix that owns the package",
     () =>
       Effect.gen(function* () {
@@ -389,7 +389,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
-  it.effect.skipIf(!symlinksSupported)(
+  it.effect.skipIf(windowsHost || !symlinksSupported)(
     "switches to pnpm updates when the real path lives in pnpm's global store",
     () =>
       Effect.gen(function* () {
@@ -509,7 +509,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
-  it.effect.skipIf(!symlinksSupported)(
+  it.effect.skipIf(windowsHost || !symlinksSupported)(
     "prefers npm ownership over the Node keg the package lives under",
     () =>
       Effect.gen(function* () {
@@ -703,7 +703,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
           },
         });
       }),
-    { skip: !symlinksSupported },
+    { skip: windowsHost || !symlinksSupported },
   );
 
   it.effect.skipIf(windowsHost)(

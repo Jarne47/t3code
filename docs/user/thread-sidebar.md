@@ -45,7 +45,7 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 On web and desktop, use Mod+Shift+B to switch between the project tree and the new sidebar. The same action is available in the command palette as Switch to legacy sidebar or Switch to new sidebar.
 
-In the new sidebar, use the sort menu to choose manual order, last user message, or creation time. Enable **Group by project** to keep each project’s active threads together, then drag a project header to arrange the groups. The selected sort applies within each project. Group order is saved independently, including when grouping is temporarily turned off. Pinned threads stay above active work in their saved order. These view choices are local to the client; the native mobile app keeps its existing ordering.
+In the new sidebar, use the sort menu to choose manual order, last user message, or creation time. Enable **Group by project** to keep each project’s active threads together. Each group shows five threads initially; choose **See more** to reveal the rest or **See less** to return to five. Click a project heading to fold or unfold it, or drag its grip to arrange the groups. Folding is remembered on this client and leaves thread status unchanged. The selected sort applies within each project, and the usual settle and snooze actions remain available. Group order is saved independently, including when grouping is temporarily turned off. Pinned threads stay above active work in their saved order. These view choices are local to the client; the native mobile app keeps its existing ordering.
 
 To combine copies of a project across computers, open **Settings → General → Organization → Project grouping** on web or desktop. Choose **Repository** to combine all projects with the same repository, **Repository + subfolder** to keep different folders inside that repository separate, or **Keep separate** to show each workspace individually. Subfolders match by their path relative to the repository root, so Mac and Windows checkout locations can differ. This preference is saved per device; select the same mode on each computer. Add each subfolder as a project first: grouping does not move threads out of their original project.
 
@@ -110,6 +110,25 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+To generate a fresh title from the conversation, open a thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress
+or when the connected environment needs a server update.
+
+Agents connected through T3 Code can use the same server-owned metadata workflow to
+rename a thread, regenerate its title, or link and unlink a pull request. These changes
+appear on web, desktop, and mobile without requiring the originating browser to remain
+open.
+
+### Fold working threads (beta)
+
+On web and desktop, turn on **Settings → General → Working section (beta)** to move threads that
+are working or monitoring into a collapsed **Working** section at the bottom of the sidebar. A
+thread returns to the top of the active list when it finishes, fails, or needs an approval or
+answer. Pinned threads stay in the pinned section.
+
+While this is on, the active list is ordered by when each thread last came back to you, so you
+cannot drag to reorder it. Your saved order returns when you turn it off.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
@@ -164,7 +183,34 @@ for custom configuration.
 
 ## Inspect agent work
 
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+On web and desktop, press **Resume** in an empty composer to continue a limited
+or interrupted turn manually.
+Queued messages stay saved while the limit blocks the thread. They run after
+the continuation finishes. If the queue was held by a restart, resume it then.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Auto-resume limited
+threads** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Sending a new message, archiving, or settling the
+thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze limited threads** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
+
 On web and desktop, use **Agents** to follow work delegated to subagents.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. When such a subagent needs an approval or an answer, the parent
+thread asks for it.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it

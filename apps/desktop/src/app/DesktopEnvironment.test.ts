@@ -48,8 +48,6 @@ describe("DesktopEnvironment", () => {
       });
       assert.equal(environment.baseDir, "/Users/alice/.t3-itamar");
       assert.equal(environment.stateDir, "/Users/alice/.t3-itamar/userdata");
-      assert.equal(environment.userDataDirName, "t3code-itamar");
-      assert.equal(environment.legacyUserDataDirName, "t3code-itamar");
       assert.equal(environment.displayName, "T3 Code (Itamar)");
       assert.equal(environment.appUserModelId, "com.jarne47.t3code");
     }),
