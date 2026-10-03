@@ -1,4 +1,5 @@
 import { SettingsGroup } from "./SettingsGroup";
+import { isPersonalDesktopFork } from "@t3tools/shared/personalDesktopFork";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
 import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
@@ -284,6 +285,7 @@ function AboutVersionTitle() {
 
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
+  const personalBuild = isPersonalDesktopFork(updateState?.currentVersion ?? APP_VERSION);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
 
@@ -413,7 +415,10 @@ function AboutVersionSection() {
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
 
-  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
+  const actionLabel: Record<string, string> = {
+    download: personalBuild ? "Download update" : "Download",
+    install: personalBuild ? "Restart and update" : "Install",
+  };
   const statusLabel: Record<string, string> = {
     checking: "Checking…",
     downloading: "Downloading…",
@@ -421,8 +426,9 @@ function AboutVersionSection() {
   };
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
-  const description =
-    action === "download" || action === "install"
+  const description = personalBuild
+    ? "Updates T3 Code (Itamar) from our fork's releases in its current installation location."
+    : action === "download" || action === "install"
       ? "Update available."
       : "Current version of the application.";
 
@@ -449,7 +455,13 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
-      {hasDesktopBridge ? (
+      {hasDesktopBridge && personalBuild ? (
+        <SettingsRow
+          title="Update track"
+          description="Personal releases"
+          control={<span className="text-sm">T3 Code (Itamar)</span>}
+        />
+      ) : hasDesktopBridge ? (
         <SettingsRow
           title="Update track"
           description="Use stable releases or nightly builds. Switch back anytime."

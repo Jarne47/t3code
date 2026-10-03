@@ -152,6 +152,7 @@ jobs:
       - name: Verify configuration and build desktop
         run: |
           set -euo pipefail
+          vp test run apps/desktop/src/updates/PersonalUpdater.test.ts apps/desktop/src/updates/personalInstall.test.ts apps/desktop/src/updates/DesktopUpdates.test.ts apps/desktop/src/electron/ElectronUpdater.test.ts apps/web/src/components/desktopUpdate.logic.test.ts
           vp test run scripts/lib/public-config.test.ts apps/web/src/cloud/publicConfig.test.ts apps/web/src/cloud/linkEnvironment.test.ts
           vp test run apps/web/src/components/sidebar/ActiveProjectGroups.test.tsx apps/web/src/components/ProviderUpdateEnvironmentRows.test.tsx apps/server/src/provider/providerMaintenance.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts apps/desktop/src/app/DesktopUserData.test.ts
           args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$BUILD_VERSION" --output-dir release/personal --verbose)
@@ -168,6 +169,8 @@ jobs:
           app_path="$RUNNER_TEMP/personal-app/T3 Code (Itamar).app"
           codesign --force --deep --sign - "$app_path"
           codesign --verify --deep --strict "$app_path"
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")" == com.jarne47.t3code ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")" == "$BUILD_VERSION" ]]
           rm "$zip_path"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
       - name: Upload installer
@@ -209,6 +212,8 @@ jobs:
           T3 Connect is enabled in both builds. Windows includes the WSL backend built from the same source and version.
 
           Install the same release on both computers. In Settings → Connections, sign in to your existing T3 Connect account and enable the local environment's T3 Connect access on each computer.
+
+          Personal app updates are available in Settings → About. Older builds need one manual installation of this version; future published personal releases can be downloaded and installed from the app, preserving its current installation location. Provider updates remain separate.
 
           These personal builds use a separate ~/.t3-itamar data directory. Existing nightly history is not imported automatically. Windows installers lack a commercial signing certificate; the Mac package is signed ad hoc.
           EOF

@@ -21,6 +21,27 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it.effect(
+    "enables the personal release feed without official metadata and ignores track changes",
+    () => {
+      const harness = makeHarness({
+        appVersion: "0.0.46-itamar.20261003.2",
+        env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+      });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          assert.isTrue((yield* updates.getState).enabled);
+          assert.equal((yield* updates.setChannel("nightly")).channel, "latest");
+          assert.deepEqual(harness.feedUrls(), []);
+          harness.emit("update-available", { version: "0.0.46-itamar.20261003.3" });
+          yield* flushCallbacks;
+          assert.equal((yield* updates.getState).availableVersion, "0.0.46-itamar.20261003.3");
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

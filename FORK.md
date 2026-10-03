@@ -11,6 +11,12 @@ Open [Releases](https://github.com/Jarne47/t3code/releases/latest) and install t
 
 These personal packages are not signed with Microsoft's or Apple's commercial signing certificates. macOS packages have an ad-hoc signature. They use their own data directory, `~/.t3-itamar`, and do not automatically import nightly history or connections. The personal app has no official auto-update feed.
 
+### Update the installed app
+
+Starting with `0.0.46-itamar.20261003.2`, **Settings → About** checks the personal GitHub releases. Choose **Download update**, then **Restart and update**; the sidebar also offers available app updates. Install this version manually once on each computer to enable the updater. The **Updates Available: providers** notification updates provider tools separately.
+
+The app checks package size and GitHub's SHA-256 checksum before installation. Windows installs into the running executable's directory. macOS stages and validates the signed bundle beside the running `.app`, replaces that same path after quitting, and restores the previous bundle if replacement fails. Open an installed, writable Mac copy rather than one running from a disk image or App Translocation. Personal builds follow only `Jarne47/t3code` releases; Stable/Nightly track switching is unavailable. Updating the app does not pull or build a source checkout, and only published packages are offered.
+
 ### Keep your Windows nightly history
 
 Before the personal app's first launch, quit nightly completely. In the installer, leave **Run T3 Code (Itamar)** unchecked. Copy the history and preferences with this PowerShell command. It refuses to replace an existing personal history database; the original nightly files remain in place.
@@ -69,7 +75,7 @@ With a clean working tree on the customization branch:
 
 This merges upstream `main`, installs locked dependencies, runs focused checks, and builds the web client. You can supply an upstream release tag instead of `main`. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
 
-The command first fast-forwards from the personal fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package deliberately has no auto-update feed, so official updates cannot replace the customizations.
+The command first fast-forwards from the personal fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package uses its own release updater, so official updates cannot replace the customizations.
 
 ## Weekly maintenance on this Mac
 

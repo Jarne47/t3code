@@ -1,4 +1,5 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
+import { isPersonalDesktopFork } from "@t3tools/shared/personalDesktopFork";
 import { ExternalLinkIcon } from "lucide-react";
 
 import {
@@ -52,7 +53,10 @@ export function SidebarUpdateReleaseNotes({
   readonly state: DesktopUpdateState;
   readonly tooltip: string;
 }) {
-  if (state.channel !== "nightly" || state.releaseNotes.length === 0) {
+  if (
+    (state.channel !== "nightly" && !isPersonalDesktopFork(state.currentVersion)) ||
+    state.releaseNotes.length === 0
+  ) {
     return <>{tooltip}</>;
   }
 
@@ -109,7 +113,10 @@ export function SidebarUpdateReleaseNotes({
         {state.omittedReleaseCount > 0 ? (
           <div>
             <Separator className="my-3" />
-            <ReleaseLink releaseUrl={getDesktopUpdateReleaseHistoryUrl()} shell={shell}>
+            <ReleaseLink
+              releaseUrl={getDesktopUpdateReleaseHistoryUrl(state.currentVersion)}
+              shell={shell}
+            >
               {`${state.omittedReleaseCount} older ${state.omittedReleaseCount === 1 ? "release" : "releases"} on GitHub`}
             </ReleaseLink>
           </div>

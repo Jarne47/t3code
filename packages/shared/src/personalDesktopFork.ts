@@ -4,6 +4,8 @@ export const PERSONAL_DESKTOP_FORK = {
   productName: "T3 Code (Itamar)",
   homeDirectoryName: ".t3-itamar",
   userDataDirectoryName: "t3code-itamar",
+  releasesUrl: "https://github.com/Jarne47/t3code/releases",
+  releasesApiUrl: "https://api.github.com/repos/Jarne47/t3code/releases?per_page=100",
 } as const;
 
 export function isPersonalDesktopFork(version: string): boolean {

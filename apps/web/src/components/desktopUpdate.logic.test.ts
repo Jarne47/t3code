@@ -35,6 +35,17 @@ const baseState: DesktopUpdateState = {
 };
 
 describe("desktop update button state", () => {
+  it("links personal release notes and history to the fork", () => {
+    expect(getDesktopUpdateReleaseUrl("0.0.46-itamar.20261003.2")).toBe(
+      "https://github.com/Jarne47/t3code/releases/tag/v0.0.46-itamar.20261003.2",
+    );
+    expect(getDesktopUpdateReleaseHistoryUrl("0.0.46-itamar.20261003.2")).toBe(
+      "https://github.com/Jarne47/t3code/releases",
+    );
+    expect(getDesktopUpdateReleaseUrl("0.0.46")).toBe(
+      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.46",
+    );
+  });
   it("shows a download action when an update is available", () => {
     const state: DesktopUpdateState = {
       ...baseState,
