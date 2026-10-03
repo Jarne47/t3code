@@ -163,6 +163,62 @@ it.effect("checkpoint capture skips untracked nested repositories without a comm
   }).pipe(Effect.scoped, Effect.provide(GitContractLayer)),
 );
 
+for (const hasTrackedFiles of [false, true]) {
+  it.effect(
+    `checkpoint capture respects an ignored working directory (tracked=${hasTrackedFiles})`,
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.makeVcsDriverShape();
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-checkpoint-ignored-" });
+        const { git, checkpointRef } = yield* makeCheckpointFixture(driver, root);
+        const cwd = path.join(root, "ignored logs");
+        yield* fs.makeDirectory(cwd);
+        yield* fs.writeFileString(path.join(root, ".gitignore"), "/ignored logs/\n");
+        if (hasTrackedFiles) {
+          yield* fs.writeFileString(path.join(cwd, "tracked.txt"), "original\n");
+          yield* fs.writeFileString(path.join(cwd, "deleted.txt"), "original\n");
+          yield* git(["add", "-f", "--", "ignored logs/tracked.txt", "ignored logs/deleted.txt"]);
+          yield* git(["commit", "-m", "tracked files inside ignored directory"]);
+          yield* fs.writeFileString(path.join(cwd, "tracked.txt"), "changed\n");
+          yield* fs.remove(path.join(cwd, "deleted.txt"));
+        }
+        yield* fs.writeFileString(path.join(cwd, "private.log"), "ignored contents\n");
+        const originalIndex = yield* fs.readFile(path.join(root, ".git", "index"));
+        const outsideHead = (yield* git(["show", "HEAD:file.txt"])).stdout;
+
+        yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+
+        assert.strictEqual((yield* git(["show", `${checkpointRef}:file.txt`])).stdout, outsideHead);
+        assert.strictEqual(
+          (yield* git(["ls-tree", "-r", checkpointRef, "--", "ignored logs/private.log"])).stdout,
+          "",
+        );
+        if (hasTrackedFiles) {
+          assert.strictEqual(
+            (yield* git(["show", `${checkpointRef}:ignored logs/tracked.txt`])).stdout,
+            "changed\n",
+          );
+          assert.strictEqual(
+            (yield* git(["ls-tree", "-r", checkpointRef, "--", "ignored logs/deleted.txt"])).stdout,
+            "",
+          );
+        } else {
+          assert.strictEqual(
+            (yield* git(["rev-parse", `${checkpointRef}^{tree}`])).stdout,
+            (yield* git(["rev-parse", "HEAD^{tree}"])).stdout,
+          );
+        }
+        assert.deepEqual(yield* fs.readFile(path.join(root, ".git", "index")), originalIndex);
+        assert.strictEqual(
+          yield* fs.readFileString(path.join(cwd, "private.log")),
+          "ignored contents\n",
+        );
+      }).pipe(Effect.scoped, Effect.provide(GitContractLayer)),
+  );
+}
+
 it.effect("checkpoint recovery discovers nested HEAD independently of inherited GIT_DIR", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

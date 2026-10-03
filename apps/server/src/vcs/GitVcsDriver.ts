@@ -931,7 +931,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           }
         }
 
-        const stageFiles = (exclusions: ReadonlyArray<string>) =>
+        const stageFiles = (exclusions: ReadonlyArray<string>, trackedOnly = false) =>
           execute({
             operation,
             cwd: input.cwd,
@@ -941,7 +941,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               ...durableWrite,
               "add",
               ...(sparseCheckout ? ["--sparse"] : []),
-              "-A",
+              trackedOnly ? "-u" : "-A",
               "--",
               ".",
               ...exclusions,
@@ -952,6 +952,30 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           Effect.catchTags({
             VcsProcessExitError: (error) =>
               Effect.gen(function* () {
+                // Explicitly adding an ignored cwd fails even when it contains tracked files.
+                // Honor the exclusion, but still capture updates and deletions already tracked.
+                const ignored = yield* execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["check-ignore", "--no-index", "-q", "--", "."],
+                  env: commitEnv,
+                  allowNonZeroExit: true,
+                });
+                if (ignored.exitCode === 0) {
+                  const tracked = yield* execute({
+                    operation,
+                    cwd: input.cwd,
+                    args: ["ls-files", "--cached", "-z", "--", "."],
+                    env: commitEnv,
+                    maxOutputBytes: 1,
+                    outputMode: "truncate",
+                  });
+                  // add -u also rejects a pathspec with no tracked entries.
+                  if (tracked.stdout.length === 0 && !tracked.stdoutTruncated) return;
+                  return yield* stageFiles([], true);
+                }
+                if (ignored.exitCode !== 1) return yield* error;
+
                 // Git cannot stage an embedded repository until it has a commit. Discover these
                 // only after staging fails so ordinary checkpoints do not need another file scan.
                 const untracked = yield* execute({
