@@ -235,6 +235,22 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
         }
 
+        // Startup command snapshots omit messages and activities. History sync
+        // needs the durable history, read here after preceding commands commit.
+        // Keep it local to this decision rather than retaining full thread bodies.
+        let decisionReadModel = commandReadModel;
+        if (envelope.command.type === "thread.history.sync") {
+          const threadId = envelope.command.threadId;
+          const thread = yield* projectionSnapshotQuery.getThreadDetailById(threadId);
+          decisionReadModel = {
+            ...commandReadModel,
+            threads: [
+              ...commandReadModel.threads.filter((entry) => entry.id !== threadId),
+              ...Option.toArray(thread),
+            ],
+          };
+        }
+
         // Command snapshots omit activities at startup and cap them while running.
         // Read this request's durable state before deciding how to send the answer.
         const userInputActivity =
@@ -244,7 +260,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             : Option.none();
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
-          readModel: commandReadModel,
+          readModel: decisionReadModel,
           ...(Option.isSome(userInputActivity)
             ? { userInputActivity: userInputActivity.value }
             : {}),

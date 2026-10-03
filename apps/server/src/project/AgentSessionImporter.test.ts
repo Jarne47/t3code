@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import {
   AgentSessionImportProjectChangedError,
   CommandId,
+  EventId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -29,7 +30,10 @@ import { ServerConfig } from "../config.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import {
+  makeSqlitePersistenceLive,
+  SqlitePersistenceMemory,
+} from "../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import { OrchestrationEngineLive } from "../orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../orchestration/Layers/ProjectionPipeline.ts";
@@ -559,28 +563,170 @@ const integrationScanner = AgentSessionScanner.AgentSessionScanner.of({
 const integrationServerConfig = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-agent-session-importer-test-",
 });
-const integrationRuntimeRepository = ProviderSessionRuntime.layer.pipe(
-  Layer.provide(SqlitePersistenceMemory),
-);
-const integrationLayer = Layer.mergeAll(
-  OrchestrationEngineLive.pipe(
-    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-    Layer.provide(OrchestrationProjectionPipelineLive),
-  ),
-  OrchestrationProjectionSnapshotQueryLive,
-  integrationRuntimeRepository,
-  ProviderSessionDirectoryLive.pipe(Layer.provide(integrationRuntimeRepository)),
-  Layer.succeed(AgentSessionScanner.AgentSessionScanner, integrationScanner),
-).pipe(
-  Layer.provide(ThreadBackgroundLiveness.layer),
-  Layer.provide(ThreadPlanProgress.layer),
-  Layer.provide(OrchestrationEventStoreLive),
-  Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-  Layer.provide(RepositoryIdentityResolver.layer),
-  Layer.provide(SqlitePersistenceMemory),
-  Layer.provideMerge(integrationServerConfig),
-  Layer.provideMerge(NodeServices.layer),
-);
+function makeIntegrationLayer(databasePath?: string) {
+  const persistence = databasePath
+    ? makeSqlitePersistenceLive(databasePath)
+    : SqlitePersistenceMemory;
+  const runtimeRepository = ProviderSessionRuntime.layer.pipe(Layer.provide(persistence));
+  return Layer.mergeAll(
+    OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provide(OrchestrationProjectionPipelineLive),
+    ),
+    OrchestrationProjectionSnapshotQueryLive,
+    runtimeRepository,
+    ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepository)),
+    Layer.succeed(AgentSessionScanner.AgentSessionScanner, integrationScanner),
+  ).pipe(
+    Layer.provide(ThreadBackgroundLiveness.layer),
+    Layer.provide(ThreadPlanProgress.layer),
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provide(RepositoryIdentityResolver.layer),
+    Layer.provide(persistence),
+    Layer.provideMerge(integrationServerConfig),
+    Layer.provideMerge(NodeServices.layer),
+  );
+}
+
+for (const source of ["codex", "claudeAgent"] as const) {
+  it.effect(`refreshes ${source} history after restart once a pending approval is resolved`, () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-history-restart-" });
+      const layer = makeIntegrationLayer(path.join(tempDir, "state.sqlite"));
+      const original = makeThread(source);
+      const originalOutcome = makeThreadOutcome(original);
+      const threadId = ThreadId.make(
+        `import:${original.providerInstanceId}:${original.providerSessionId}`,
+      );
+      const external = {
+        ...original,
+        messages: [
+          ...original.messages,
+          {
+            role: "user" as const,
+            text: "Continue externally",
+            createdAt: "2026-08-25T10:00:00.000Z",
+          },
+          {
+            role: "assistant" as const,
+            text: "External answer",
+            createdAt: "2026-08-25T10:01:00.000Z",
+          },
+        ],
+      };
+      const externalOutcome = {
+        ...makeThreadOutcome(external),
+        source: {
+          ...originalOutcome.source,
+          size: 100,
+          mtimeMs: Date.parse("2026-08-25T10:01:00.000Z"),
+        },
+      };
+      const refresh = importRecentAgentThreads(
+        { projectId: PROJECT_ID },
+        { importedOnly: true },
+      ).pipe(
+        Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+          scan: Effect.die("unused"),
+          recentThreads: () => Stream.succeed(externalOutcome),
+        }),
+      );
+      const before = yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("restart-project"),
+          projectId: PROJECT_ID,
+          title: "Project",
+          workspaceRoot: WORKSPACE_ROOT,
+          createdAt: original.createdAt,
+        });
+        expect(
+          yield* importRecentAgentThreads({ projectId: PROJECT_ID }).pipe(
+            Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+              scan: Effect.die("unused"),
+              recentThreads: () => Stream.succeed(originalOutcome),
+            }),
+          ),
+        ).toEqual({ importedCount: 1, skippedCount: 0 });
+        yield* engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("pending-before-restart"),
+          threadId,
+          createdAt: original.updatedAt,
+          activity: {
+            id: EventId.make("pending-before-restart"),
+            kind: "approval.requested",
+            summary: "Approval required",
+            tone: "info",
+            turnId: null,
+            createdAt: original.updatedAt,
+            payload: { requestId: "pending-approval" },
+          },
+        });
+        return {
+          messages: Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId)).messages,
+          binding: Option.getOrThrow(yield* directory.getBinding(threadId)),
+        };
+      }).pipe(Effect.provide(layer));
+
+      // Each provided layer owns and closes its engine and SQLite connection.
+      const syncedMessages = yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        expect(yield* refresh).toEqual({ importedCount: 0, skippedCount: 1 });
+        expect(Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId)).messages).toEqual(
+          before.messages,
+        );
+        expect(Option.getOrThrow(yield* directory.getBinding(threadId))).toEqual(before.binding);
+        yield* engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("resolve-after-restart"),
+          threadId,
+          createdAt: externalOutcome.thread.messages.at(-1)!.createdAt,
+          activity: {
+            id: EventId.make("resolve-after-restart"),
+            kind: "approval.resolved",
+            summary: "Approval resolved",
+            tone: "info",
+            turnId: null,
+            createdAt: externalOutcome.thread.messages.at(-1)!.createdAt,
+            payload: { requestId: "pending-approval" },
+          },
+        });
+        expect(yield* refresh).toEqual({ importedCount: 1, skippedCount: 0 });
+        expect(yield* refresh).toEqual({ importedCount: 1, skippedCount: 0 });
+        const thread = Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId));
+        expect(thread.messages.slice(0, before.messages.length)).toEqual(before.messages);
+        expect(thread.messages.map((message) => message.text)).toEqual(
+          external.messages.map((message) => message.text),
+        );
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        expect(binding.resumeCursor).toEqual(before.binding.resumeCursor);
+        expect(binding.runtimePayload).toMatchObject({
+          importedTranscripts: [externalOutcome.source],
+        });
+        return thread.messages;
+      }).pipe(Effect.provide(Layer.fresh(layer)));
+
+      yield* Effect.gen(function* () {
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        expect(yield* refresh).toEqual({ importedCount: 1, skippedCount: 0 });
+        expect(Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId)).messages).toEqual(
+          syncedMessages,
+        );
+      }).pipe(Effect.provide(Layer.fresh(layer)));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+}
+
+const integrationLayer = makeIntegrationLayer();
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
   it.effect(
