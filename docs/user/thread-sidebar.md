@@ -47,6 +47,8 @@ On web and desktop, use Mod+Shift+B to switch between the project tree and the n
 
 In the new sidebar, use the sort menu to choose manual order, last user message, or creation time. Enable **Group by project** to keep each project’s active threads together, then drag a project header to arrange the groups. The selected sort applies within each project. Group order is saved independently, including when grouping is temporarily turned off. Pinned threads stay above active work in their saved order. These view choices are local to the client; the native mobile app keeps its existing ordering.
 
+To combine copies of a project across computers, open **Settings → General → Organization → Project grouping** on web or desktop. Choose **Repository** to combine all projects with the same repository, **Repository + subfolder** to keep different folders inside that repository separate, or **Keep separate** to show each workspace individually. Subfolders match by their path relative to the repository root, so Mac and Windows checkout locations can differ. This preference is saved per device; select the same mode on each computer. Add each subfolder as a project first: grouping does not move threads out of their original project.
+
 Choose Manual order to drag threads again. Switching views preserves your saved manual positions.
 
 ## Pin and reorder threads
