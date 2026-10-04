@@ -34,8 +34,8 @@ class MaintenanceTest(unittest.TestCase):
         for name in ('personal', 'upstream'):
             self.command('git', 'init', '--bare', str(self.root / name))
             self.git('remote', 'add', name, str(self.root / name))
-        self.branch = 'itamar/sidebar-customizations'
-        self.git('checkout', '-b', self.branch)
+        self.branch = 'main'
+        self.git('branch', 'upstream-fixture')
         self.git('push', 'personal', self.branch)
         self.git('push', 'upstream', 'main')
         self.binary = self.root / 'bin'
@@ -55,12 +55,12 @@ class MaintenanceTest(unittest.TestCase):
         self.git('commit', '-m', message)
 
     def advance_upstream(self, fail=False, conflict=False):
-        self.git('checkout', 'main')
+        self.git('checkout', 'upstream-fixture')
         (self.repo / ('content' if conflict else 'upstream-change')).write_text('upstream\n')
         if fail:
             (self.repo / 'fail-check').touch()
         self.commit('upstream change')
-        self.git('push', 'upstream', 'main')
+        self.git('push', 'upstream', 'HEAD:main')
         self.git('checkout', self.branch)
 
     def run_maintenance(self):

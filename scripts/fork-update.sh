@@ -6,8 +6,8 @@ if [[ -n "$(git status --porcelain)" ]]; then
   echo "Commit or stash your work before updating." >&2
   exit 1
 fi
-if [[ "$(git branch --show-current)" != itamar/* ]]; then
-  echo "Switch to your itamar/* customization branch before updating." >&2
+if [[ "$(git branch --show-current)" != main && "$(git branch --show-current)" != itamar/* ]]; then
+  echo "Switch to main or an itamar/* customization branch before updating." >&2
   exit 1
 fi
 upstream_ref="${1:-main}"

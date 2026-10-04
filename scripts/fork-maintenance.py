@@ -35,7 +35,7 @@ def maintain(repo, state):
                 return completed.stdout.strip() if capture else None
 
             try:
-                branch = "itamar/sidebar-customizations"
+                branch = "main"
                 personal_ref = f"refs/remotes/personal/{branch}"
                 upstream_ref = "refs/remotes/upstream/main"
                 run("git", "fetch", "personal", f"refs/heads/{branch}:{personal_ref}")

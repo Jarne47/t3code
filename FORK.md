@@ -1,6 +1,6 @@
 # Personal sidebar fork
 
-This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Customizations live on the default branch, `itamar/sidebar-customizations`; `main` remains an upstream reference. The `personal` remote is the fork and `upstream` is the original repository.
+This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Customizations live on the default branch, `main`. The `personal` remote is the fork and `upstream` is the original repository; `upstream/main` remains the unmodified upstream reference. The former `itamar/sidebar-customizations` branch is retained for historical reference.
 
 ## Download
 
@@ -67,7 +67,7 @@ vp env exec --node 24 -- vp run dev:desktop --home-dir "$PWD/.t3"
 
 ## Update from the team
 
-With a clean working tree on the customization branch:
+With a clean working tree on `main`:
 
 ```sh
 ./scripts/fork-update.sh
@@ -79,7 +79,7 @@ The command first fast-forwards from the personal fork to pick up weekly mainten
 
 ## Weekly maintenance on this Mac
 
-The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches upstream `main`, merges into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `personal/itamar/sidebar-customizations`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
+The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches upstream `main`, merges into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `personal/main`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
 
 Latest results and command output are in `~/Library/Application Support/t3code-maintenance/latest.json` and `latest.log`. macOS notifications are attempted when updates succeed or need attention, subject to notification settings. The task requires this Mac and your logged-in session; a scheduled run missed during sleep runs on wake, while one missed during shutdown waits for the next Sunday. No changes means no dependency install or tests are needed.
 
