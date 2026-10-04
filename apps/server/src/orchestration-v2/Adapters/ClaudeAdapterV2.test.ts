@@ -70,6 +70,7 @@ import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
 });
@@ -2548,7 +2549,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       if (terminal.status !== "failed") return;
       assert.include(terminal.failure.message, "run `claude auth login`");
       assert.include(terminal.failure.message, configDir);
-      assert.include(terminal.failure.message, JSON.stringify(cwd));
+      assert.include(terminal.failure.message, yield* encodeStringJson(cwd));
       assert.notInclude(terminal.failure.message, "repeated API errors");
     }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
