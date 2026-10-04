@@ -155,11 +155,15 @@ jobs:
           vp test run apps/desktop/src/updates/PersonalUpdater.test.ts apps/desktop/src/updates/personalInstall.test.ts apps/desktop/src/updates/DesktopUpdates.test.ts apps/desktop/src/electron/ElectronUpdater.test.ts apps/web/src/components/desktopUpdate.logic.test.ts
           vp test run scripts/lib/public-config.test.ts apps/web/src/cloud/publicConfig.test.ts apps/web/src/cloud/linkEnvironment.test.ts
           vp test run apps/web/src/components/sidebar/ActiveProjectGroups.test.tsx apps/web/src/components/ProviderUpdateEnvironmentRows.test.tsx apps/server/src/provider/providerMaintenance.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts apps/desktop/src/app/DesktopUserData.test.ts
+          node scripts/update-release-package-versions.ts "$BUILD_VERSION"
           args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$BUILD_VERSION" --output-dir release/personal --verbose)
           if [[ "$BUILD_PLATFORM" == win ]]; then
             args+=(--wsl-runtime "$PWD/wsl-runtime/t3-$BUILD_VERSION-linux-x64.tar.gz")
           fi
           node scripts/build-desktop-artifact.ts "${args[@]}"
+          server_version="$(node apps/server/dist/bin.mjs --version)"
+          echo "Bundled server version: $server_version"
+          [[ "$server_version" == "t3 v$BUILD_VERSION" ]]
       - name: Sign Mac package ad hoc
         if: matrix.platform == 'mac'
         run: |
@@ -171,6 +175,9 @@ jobs:
           codesign --verify --deep --strict "$app_path"
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")" == com.jarne47.t3code ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")" == "$BUILD_VERSION" ]]
+          server_version="$(ELECTRON_RUN_AS_NODE=1 "$app_path/Contents/MacOS/T3 Code (Itamar)" "$app_path/Contents/Resources/app.asar/apps/server/dist/bin.mjs" --version)"
+          echo "Packaged server version: $server_version"
+          [[ "$server_version" == "t3 v$BUILD_VERSION" ]]
           rm "$zip_path"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
       - name: Upload installer
