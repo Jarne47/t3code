@@ -87,7 +87,8 @@ function writeExecutable(path: string) {
 function linkIntoPackage(tempDir: string, name: string, packageSegments: ReadonlyArray<string>) {
   const target = NodePath.join(tempDir, ...packageSegments, "bin", `${name}.js`);
   writeExecutable(target);
-  const link = NodePath.join(tempDir, "bin", name);
+  // Windows lookup requires an executable suffix, even for a symlink fixture.
+  const link = NodePath.join(tempDir, "bin", windowsHost ? `${name}.exe` : name);
   NodeFS.mkdirSync(NodePath.dirname(link), { recursive: true });
   NodeFS.symlinkSync(target, link);
   return link;
@@ -837,9 +838,13 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     () =>
       Effect.gen(function* () {
         const voltaHome = NodePath.join(yield* makeTempDir("t3-volta-capabilities"), ".volta");
-        const shim = NodePath.join(voltaHome, "bin", "volta-shim");
+        const shim = NodePath.join(voltaHome, "bin", windowsHost ? "volta-shim.exe" : "volta-shim");
         writeExecutable(shim);
-        const link = NodePath.join(voltaHome, "bin", "package-tool");
+        const link = NodePath.join(
+          voltaHome,
+          "bin",
+          windowsHost ? "package-tool.exe" : "package-tool",
+        );
         NodeFS.symlinkSync(shim, link);
         const resolve = resolveProviderMaintenanceCapabilitiesEffect(packageToolUpdate, {
           binaryPath: link,
