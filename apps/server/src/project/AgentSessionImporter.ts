@@ -48,6 +48,12 @@ const decodeImportedTranscriptPayload = Schema.decodeUnknownOption(
     importedTranscripts: Schema.optional(Schema.Array(AgentSessionImportSource)),
   }),
 );
+const decodeImportedResumeCursor = Schema.decodeUnknownOption(
+  Schema.Struct({
+    threadId: Schema.optional(Schema.String),
+    resume: Schema.optional(Schema.String),
+  }),
+);
 
 class AgentSessionUnresumableSessionError extends Schema.TaggedError<AgentSessionUnresumableSessionError>()(
   "AgentSessionUnresumableSessionError",
@@ -275,6 +281,32 @@ const make = Effect.gen(function* () {
             const activeProvider = snapshot.providerThreads.find(
               (provider) => provider.id === snapshot.thread.activeProviderThreadId,
             );
+            let unresumedLegacyImport = false;
+            // V1 migration intentionally retires native bindings. Refresh its text until
+            // the first V2 run, without reattaching a retired or subsequently forked session.
+            if (
+              snapshot.thread.activeProviderThreadId === null &&
+              snapshot.providerThreads.length === 0 &&
+              snapshot.runs.length === 0
+            ) {
+              const runtime = yield* runtimes.getByThreadId({ threadId });
+              if (
+                Option.isSome(runtime) &&
+                runtime.value.status === "stopped" &&
+                runtime.value.providerName === thread.source &&
+                (runtime.value.providerInstanceId ?? runtime.value.providerName) ===
+                  thread.providerInstanceId
+              ) {
+                const cursor = decodeImportedResumeCursor(runtime.value.resumeCursor);
+                unresumedLegacyImport =
+                  Option.isSome(cursor) &&
+                  (thread.source === "codex" ? cursor.value.threadId : cursor.value.resume) ===
+                    thread.providerSessionId;
+              }
+            }
+            const nativeSessionMatches =
+              activeProvider?.nativeThreadRef?.nativeId === thread.providerSessionId &&
+              activeProvider?.providerInstanceId === thread.providerInstanceId;
             // Do not import over an active turn or a thread that has switched its native session.
             if (
               snapshot.thread.deletedAt !== null ||
@@ -284,9 +316,8 @@ const make = Effect.gen(function* () {
                     run.status,
                   ),
               ) ||
-              activeProvider?.nativeThreadRef?.nativeId !== thread.providerSessionId ||
-              activeProvider.providerInstanceId !== thread.providerInstanceId ||
-              (activeProvider.pendingBackgroundTasks?.length ?? 0) > 0
+              (!nativeSessionMatches && !unresumedLegacyImport) ||
+              (activeProvider?.pendingBackgroundTasks?.length ?? 0) > 0
             )
               return false;
             const latest = snapshot.messages.reduce(
