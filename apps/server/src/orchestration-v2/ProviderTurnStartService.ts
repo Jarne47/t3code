@@ -684,6 +684,17 @@ export const layer: Layer.Layer<
           return resumed.success;
         }
 
+        // Linked Codex chats must keep their native identity across applications.
+        // A failed resume is actionable; creating another session would silently split them.
+        if (
+          providerThread.nativeThreadRef.driver === "codex" &&
+          (providerThread.nativeMetadata?.sharedHistory === true ||
+            projection.thread.id ===
+              `import:${providerThread.providerInstanceId}:${providerThread.nativeThreadRef.nativeId}`)
+        ) {
+          return yield* loadFromProvider(Effect.fail(resumed.failure));
+        }
+
         yield* Effect.logWarning("Provider resume failed; attempting a fresh native session", {
           driver: session.driver,
           providerThreadId: providerThread.id,

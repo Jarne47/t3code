@@ -752,12 +752,12 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.thread_id": input.threadId,
     });
-    yield* threadManagement.ensureLegacyTranscript(input.threadId).pipe(
+    yield* threadManagement.refreshTranscript(input.threadId).pipe(
       Effect.mapError(
         (cause) =>
           new OrchestrationV2GetThreadProjectionError({
             threadId: input.threadId,
-            message: `Failed to hydrate migrated thread ${input.threadId}`,
+            message: `Failed to refresh conversation ${input.threadId}`,
             cause,
           }),
       ),

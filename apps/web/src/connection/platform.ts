@@ -98,11 +98,13 @@ const wakeupsLayer = Wakeups.layer({
             }
           };
           document.addEventListener("visibilitychange", listener);
+          window.addEventListener("focus", listener);
           return listener;
         }),
         (listener) =>
           Effect.sync(() => {
             document.removeEventListener("visibilitychange", listener);
+            window.removeEventListener("focus", listener);
           }),
       ).pipe(Effect.asVoid),
     ),

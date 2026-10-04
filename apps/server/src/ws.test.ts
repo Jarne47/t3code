@@ -1,6 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import {
   ORCHESTRATION_PROTOCOL_VERSION,
+  ThreadId,
+  EventId,
+  MessageId,
   type ServerConfig,
   type ServerConfigStreamEvent,
 } from "@t3tools/contracts";
@@ -9,6 +12,9 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -23,6 +29,7 @@ import {
   hasCompatibleOrchestrationProtocol,
   resolveAvailableEditorsForConfig,
   shouldUseBoundedThreadSnapshot,
+  subscribeOrchestrationV2Thread,
   withLateEditorConfig,
 } from "./ws.ts";
 
@@ -234,3 +241,77 @@ it.effect("recovers a reveal kind whose real probe outlasts the config timeout",
     }
   }).pipe(Effect.scoped),
 );
+
+it.effect("replays newly refreshed Codex messages before completing a cached thread reopen", () => {
+  const threadId = ThreadId.make("cached-codex-thread");
+  const now = DateTime.makeUnsafe("2026-10-04T10:00:00Z");
+  let refreshed = false;
+  const stored = {
+    sequence: 2,
+    event: {
+      id: EventId.make("external-reply-event"),
+      type: "message.updated" as const,
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: MessageId.make("external-reply"),
+        threadId,
+        runId: null,
+        nodeId: null,
+        role: "assistant" as const,
+        text: "Reply from Codex",
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+        attachments: [],
+        streaming: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    },
+  };
+  return subscribeOrchestrationV2Thread({
+    threadId,
+    afterSequence: 1,
+    requestCompletionMarker: true,
+  }).pipe(
+    Effect.flatMap(Stream.runCollect),
+    Effect.tap((items) =>
+      Effect.sync(() => {
+        assert.deepEqual(
+          Array.from(items).map((item) => item.kind),
+          ["event", "synchronized"],
+        );
+        const first = Array.from(items)[0];
+        assert.equal(
+          first?.kind === "event" && first.event.type === "message.updated"
+            ? first.event.payload.text
+            : null,
+          "Reply from Codex",
+        );
+      }),
+    ),
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          ensureLegacyTranscript: () => Effect.void,
+          refreshTranscript: () =>
+            Effect.sync(() => {
+              refreshed = true;
+            }),
+          streamStoredEventsFrom: () => Stream.empty,
+        }),
+        Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
+          latestAgentSequence: () => Effect.sync(() => (refreshed ? 2 : 1)),
+          getAgentReplayStats: () =>
+            Effect.sync(() => ({
+              eventCount: refreshed ? 1 : 0,
+              rawPayloadBytes: 200,
+              hasCreateEvent: false,
+            })),
+          readAgentEvents: (input) =>
+            input?.throughSequence === 2 ? Stream.succeed(stored as never) : Stream.empty,
+        }),
+      ),
+    ),
+  );
+});

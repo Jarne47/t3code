@@ -45,7 +45,7 @@ import { layer as runExecutionServiceLayer } from "./RunExecutionService.ts";
 import { layer as runFinalizationServiceLayer } from "./RunFinalizationService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts";
-import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
+import { layerWithSessionImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
@@ -223,18 +223,25 @@ const agentSessionImporterProvided = agentSessionImporterLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
       ThreadCommandExecutor.layer,
-      AgentSessionScanner.layer,
-      ProjectServiceLayerLive,
+      AgentSessionScanner.layer.pipe(Layer.provide(ProjectStore.layer)),
+      ProjectStore.layer,
       orchestratorProvided,
       eventSinkProvided,
       idAllocatorLayer,
       providerSessionRuntimeLayer,
+      providerSessionManagerProvided,
     ),
   ),
 );
 
 const threadManagementProvided = threadManagementServiceLayer.pipe(
-  Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      orchestratorProvided,
+      legacyV1ThreadImporterProvided,
+      agentSessionImporterProvided,
+    ),
+  ),
 );
 export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
   Layer.provide(ProjectServiceLayerLive),

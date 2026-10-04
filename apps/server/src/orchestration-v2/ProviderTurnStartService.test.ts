@@ -166,6 +166,7 @@ function makeLocalCommandHarness(input: {
    * fallback succeeds, then reading history for its handoff fails.
    */
   readonly historyReadFailureAfterFallback?: unknown;
+  readonly sharedHistory?: boolean;
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
@@ -351,7 +352,13 @@ function makeLocalCommandHarness(input: {
     projection = {
       ...projection,
       providerThreads: projection.providerThreads.map((candidate) =>
-        candidate.id === providerThreadId ? { ...candidate, nativeThreadRef } : candidate,
+        candidate.id === providerThreadId
+          ? {
+              ...candidate,
+              nativeThreadRef,
+              nativeMetadata: { sharedHistory: input.sharedHistory === true },
+            }
+          : candidate,
       ),
     };
   }
@@ -381,6 +388,7 @@ function makeLocalCommandHarness(input: {
       ),
     ),
   );
+  const fallbackEnsureThread = vi.fn(() => Effect.succeed(providerThread));
   const resumeFallbackSession = {
     driver: providerThread.driver,
     resumeThread: () =>
@@ -391,7 +399,7 @@ function makeLocalCommandHarness(input: {
           cause: "native thread is gone",
         }),
       ),
-    ensureThread: () => Effect.succeed(providerThread),
+    ensureThread: fallbackEnsureThread,
   };
   const open = vi.fn(() =>
     input.interruptOpen === true
@@ -429,7 +437,7 @@ function makeLocalCommandHarness(input: {
                     updatedAt: now,
                     lastError: null,
                   },
-                  ensureThread: () => Effect.succeed(providerThread),
+                  ensureThread: fallbackEnsureThread,
                 } as never)
               : Effect.die("A local command must not open a native session."),
   );
@@ -531,6 +539,7 @@ function makeLocalCommandHarness(input: {
     ),
   );
   return {
+    fallbackEnsureThread,
     open,
     writeIfRunCurrent,
     startRootRun,
@@ -855,3 +864,20 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect("keeps a shared Codex conversation bound when native resume fails", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      sharedHistory: true,
+      historyReadFailureAfterFallback: new Error("must not load fallback history"),
+    });
+    yield* harness.start;
+    expect(harness.fallbackEnsureThread).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+    expect(harness.projection().providerThreads.at(-1)?.nativeThreadRef?.nativeId).toBe(
+      "native-resume-thread",
+    );
+  }),
+);

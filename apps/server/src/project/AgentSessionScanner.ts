@@ -124,6 +124,7 @@ const TranscriptRecord = Schema.Struct({
     Schema.Struct({
       id: Schema.optional(Schema.String),
       session_id: Schema.optional(Schema.String),
+      turn_id: Schema.optional(Schema.String),
       type: Schema.optional(Schema.String),
       role: Schema.optional(Schema.String),
       message: Schema.optional(Schema.String),
@@ -155,6 +156,9 @@ export interface AgentSessionThreadMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly createdAt: string;
+  readonly nativeItemId?: string;
+  readonly nativeTurnId?: string;
+  readonly nativeContext?: boolean;
 }
 
 export interface AgentSessionThread {
@@ -166,6 +170,7 @@ export interface AgentSessionThread {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly messages: ReadonlyArray<AgentSessionThreadMessage>;
+  readonly activeTurnId?: string;
 }
 
 export type AgentSessionRecentThread =
@@ -192,8 +197,13 @@ export class AgentSessionScanner extends Context.Service<
     readonly recentThreads: (
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
-      options?: { readonly importedOnly?: boolean },
+      options?: { readonly importedOnly?: boolean; readonly forceRead?: boolean },
     ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
+    readonly readCodexThread: (
+      providerInstanceId: ProviderInstanceId,
+      nativeId: string,
+      previous?: AgentSessionImportSource,
+    ) => Effect.Effect<AgentSessionRecentThread, AgentSessionScanError>;
   }
 >()("t3/project/AgentSessionScanner") {}
 
@@ -299,6 +309,7 @@ export function parseAgentSessionTranscript(
 function parseAgentSessionRecords(
   input: AgentSessionTranscriptMetadata,
   records: ReadonlyArray<DecodedTranscriptRecord>,
+  messageLimit = MAX_IMPORTED_MESSAGES,
 ): AgentSessionThread | null {
   const fallbackTimestamp = DateTime.formatIso(DateTime.makeUnsafe(input.lastActiveAtMs));
   // Claude filenames are session IDs. Codex rollout filenames include extra
@@ -307,6 +318,11 @@ function parseAgentSessionRecords(
   let title: string | null = null;
   let model: string | null = null;
   let hasCodexSessionId = false;
+  let nativeTurnId: string | undefined;
+  let activeTurnId: string | undefined;
+  const hasTurnLifecycle = records.some(
+    (record) => record.type === "event_msg" && record.payload?.type === "task_started",
+  );
   const messages: Array<AgentSessionThreadMessage & { readonly codexResponseUser: boolean }> = [];
   let firstUserMessage:
     | (AgentSessionThreadMessage & { readonly codexResponseUser: boolean })
@@ -374,7 +390,7 @@ function parseAgentSessionRecords(
       firstUserMessage = message;
     }
     messages.push(message);
-    if (messages.length > MAX_IMPORTED_MESSAGES) messages.shift();
+    if (messages.length > messageLimit) messages.shift();
   };
 
   const hasMatchingCodexEventInTurn = (text: string) => {
@@ -425,6 +441,20 @@ function parseAgentSessionRecords(
       continue;
     }
 
+    if (record.type === "event_msg" && record.payload?.type === "task_started") {
+      nativeTurnId = record.payload.turn_id;
+      activeTurnId = nativeTurnId ?? "unknown";
+      continue;
+    }
+    if (
+      record.type === "event_msg" &&
+      (record.payload?.type === "task_complete" || record.payload?.type === "turn_aborted")
+    ) {
+      if (record.payload.turn_id === undefined || record.payload.turn_id === activeTurnId) {
+        activeTurnId = undefined;
+      }
+      continue;
+    }
     if (record.type === "session_meta") {
       const sessionId = record.payload?.id?.trim() || record.payload?.session_id?.trim();
       if (!hasCodexSessionId && sessionId) {
@@ -457,6 +487,7 @@ function parseAgentSessionRecords(
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
         codexResponseUser: false,
+        ...(nativeTurnId === undefined ? {} : { nativeTurnId }),
       });
       continue;
     }
@@ -469,6 +500,8 @@ function parseAgentSessionRecords(
     }
 
     const extractedText = extractText(record.payload.content);
+    nativeTurnId =
+      codexTurnId(record.payload.internal_chat_message_metadata_passthrough) ?? nativeTurnId;
     if (extractedText.length === 0) continue;
     if (record.payload.role === "user" && canonicalCodexResponseUserIndices.has(recordIndex)) {
       continue;
@@ -481,6 +514,11 @@ function parseAgentSessionRecords(
       text: extractedText,
       createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
       codexResponseUser: record.payload.role === "user",
+      ...(hasTurnLifecycle && activeTurnId === undefined && record.payload.role === "user"
+        ? { nativeContext: true }
+        : {}),
+      ...(record.payload.id === undefined ? {} : { nativeItemId: record.payload.id }),
+      ...(nativeTurnId === undefined ? {} : { nativeTurnId }),
     });
   }
 
@@ -492,7 +530,7 @@ function parseAgentSessionRecords(
   const { codexResponseUser: _codexResponseUser, ...visibleFirstUserMessage } = firstUserMessage;
   const retainedMessages = firstUserMessageRetained
     ? visibleMessages
-    : [visibleFirstUserMessage, ...visibleMessages.slice(-(MAX_IMPORTED_MESSAGES - 1))];
+    : [visibleFirstUserMessage, ...visibleMessages.slice(-(messageLimit - 1))];
   const derivedTitle = visibleFirstUserMessage.text.trim().split("\n")[0]?.slice(0, 100).trim();
 
   return {
@@ -504,6 +542,7 @@ function parseAgentSessionRecords(
     createdAt: retainedMessages[0]?.createdAt ?? fallbackTimestamp,
     updatedAt: fallbackTimestamp,
     messages: retainedMessages,
+    ...(activeTurnId === undefined ? {} : { activeTurnId }),
   };
 }
 
@@ -529,7 +568,10 @@ function shouldRetainDecodedRecord(
   return (
     record.type === "session_meta" ||
     record.type === "turn_context" ||
-    (record.type === "event_msg" && record.payload?.type === "user_message") ||
+    (record.type === "event_msg" &&
+      ["user_message", "task_started", "task_complete", "turn_aborted"].includes(
+        record.payload?.type ?? "",
+      )) ||
     (record.type === "response_item" &&
       record.payload?.type === "message" &&
       (record.payload.role === "user" || record.payload.role === "assistant"))
@@ -1330,6 +1372,7 @@ export const make = Effect.gen(function* () {
     workspaceRoot: string,
     completedSources: ReadonlyArray<AgentSessionImportSource>,
     importedOnly: boolean,
+    forceRead: boolean,
   ) {
     const root = path.resolve(expandHomePath(workspaceRoot));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
@@ -1414,7 +1457,7 @@ export const make = Effect.gen(function* () {
             (source) =>
               source.provider === candidate.source && sameTranscriptIdentity(source, identity),
           );
-          if (completedSource !== undefined) {
+          if (completedSource !== undefined && !forceRead) {
             const sessionKey = `${completedSource.providerInstanceId}\0${completedSource.providerSessionId}`;
             if (importedSessions.has(sessionKey)) return Option.none<AgentSessionRecentThread>();
             importedSessions.add(sessionKey);
@@ -1504,10 +1547,114 @@ export const make = Effect.gen(function* () {
     options = {},
   ) =>
     Stream.unwrap(
-      prepareRecentThreads(workspaceRoot, completedSources, options.importedOnly === true),
+      prepareRecentThreads(
+        workspaceRoot,
+        completedSources,
+        options.importedOnly === true,
+        options.forceRead === true,
+      ),
     );
 
-  return AgentSessionScanner.of({ scan, recentThreads });
+  // Opening a linked conversation must not depend on discovery's age window,
+  // project-root filter, or 200-message initial-import limit.
+  const readCodexThread: AgentSessionScanner["Service"]["readCodexThread"] = Effect.fn(
+    "AgentSessionScanner.readCodexThread",
+  )(function* (providerInstanceId, nativeId, previous) {
+    const skipped: AgentSessionRecentThread = { _tag: "Skipped" };
+    if (!/^[0-9a-f-]{36}$/i.test(nativeId)) return skipped;
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
+    );
+    const instance =
+      settings.providerInstances[providerInstanceId] ??
+      (providerInstanceId === "codex"
+        ? { driver: ProviderDriverKind.make("codex"), config: settings.providers.codex }
+        : undefined);
+    if (instance?.driver !== "codex" || !resolveProviderInstanceEnabled(instance)) return skipped;
+    const config = decodeCodexSettings(instance.config ?? {});
+    if (Option.isNone(config)) return skipped;
+    const environmentHome =
+      instance.environment?.findLast((entry) => entry.name === "CODEX_HOME")?.value ??
+      hostEnvironment.CODEX_HOME;
+    const layout = yield* resolveCodexHomeLayout(
+      config.value.homePath.trim().length === 0 &&
+        config.value.shadowHomePath.trim().length === 0 &&
+        environmentHome?.trim()
+        ? { ...config.value, homePath: environmentHome }
+        : config.value,
+    ).pipe(Effect.provideService(Path.Path, path));
+    const root = path.join(layout.sharedHomePath, "sessions");
+    let filePath =
+      previous?.providerInstanceId === providerInstanceId &&
+      previous.providerSessionId === nativeId &&
+      previous.filePath.startsWith(root + path.sep)
+        ? previous.filePath
+        : undefined;
+    if (filePath === undefined || Option.isNone(yield* statOption(filePath))) {
+      // Inspect names only; do not stat or decode unrelated transcripts.
+      let remaining = MAX_DISCOVERY_OPERATIONS_PER_SOURCE;
+      search: for (const year of (yield* listDirectory(root)).toSorted().toReversed()) {
+        if (!/^\d{4}$/.test(year)) continue;
+        for (const month of (yield* listDirectory(path.join(root, year))).toSorted().toReversed()) {
+          if (!/^\d{2}$/.test(month)) continue;
+          for (const day of (yield* listDirectory(path.join(root, year, month)))
+            .toSorted()
+            .toReversed()) {
+            if (!/^\d{2}$/.test(day)) continue;
+            if (--remaining < 0) break search;
+            const directory = path.join(root, year, month, day);
+            const entry = (yield* listDirectory(directory)).find(
+              (entry) => entry.startsWith("rollout-") && entry.endsWith(`-${nativeId}.jsonl`),
+            );
+            if (entry !== undefined) {
+              filePath = path.join(directory, entry);
+              break search;
+            }
+          }
+        }
+      }
+    }
+    if (filePath === undefined) return skipped;
+    const stats = yield* statOption(filePath);
+    if (Option.isNone(stats) || stats.value.type !== "File") return skipped;
+    const identity = transcriptIdentity(filePath, stats.value);
+    if (
+      previous !== undefined &&
+      previous.providerSessionId === nativeId &&
+      previous.providerInstanceId === providerInstanceId &&
+      sameTranscriptIdentity(previous, identity)
+    ) {
+      return { _tag: "AlreadyImported", source: previous };
+    }
+    if (identity.size > MAX_IMPORTED_TRANSCRIPT_BYTES) return skipped;
+    const snapshot = yield* readTranscript(filePath, identity, MAX_IMPORT_RECORDS, "codex").pipe(
+      importReadLock.withPermits(1),
+    );
+    if (snapshot === null) return skipped;
+    const thread = parseAgentSessionRecords(
+      {
+        source: "codex",
+        providerInstanceId,
+        fallbackSessionId: nativeId,
+        lastActiveAtMs: identity.mtimeMs ?? 0,
+      },
+      snapshot.records,
+      Number.POSITIVE_INFINITY,
+    );
+    if (thread === null || thread.providerSessionId !== nativeId) return skipped;
+    return {
+      _tag: "Importable",
+      thread,
+      source: {
+        ...identity,
+        provider: "codex",
+        providerInstanceId,
+        providerSessionId: nativeId,
+      },
+    };
+  });
+
+  return AgentSessionScanner.of({ scan, recentThreads, readCodexThread });
 });
 
 export const layer = Layer.effect(AgentSessionScanner, make);

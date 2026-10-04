@@ -18,6 +18,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -419,3 +420,68 @@ it.effect.each([
     }
   }),
 );
+
+it.effect("blocks UI and MCP replies when the shared Codex conversation is still active", () => {
+  const threadId = ThreadId.make("shared-busy-thread");
+  const projectId = ProjectId.make("shared-project");
+  let dispatched = false;
+  const testLayer = ThreadManagementService.layerWithSessionImporter.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
+          ensureTranscript: () =>
+            Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
+        }),
+        Layer.mock(AgentSessionImporter.AgentSessionImporter)({
+          refreshThread: (_id, options) =>
+            options?.forReply
+              ? Effect.fail(
+                  new AgentSessionImporter.AgentSessionThreadRefreshError({
+                    threadId,
+                    reason: "busy",
+                  }),
+                )
+              : Effect.succeed(undefined),
+        }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: { id: threadId, projectId, deletedAt: null, archivedAt: null },
+              runs: [],
+              providerTurns: [],
+            } as never),
+          dispatch: () =>
+            Effect.sync(() => {
+              dispatched = true;
+              return {} as never;
+            }),
+        }),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService.ThreadManagementService;
+    const common = {
+      threadId,
+      messageId: MessageId.make("new-message"),
+      commandId: CommandId.make("new-command"),
+      text: "Continue",
+      attachments: [],
+      createdBy: "user" as const,
+      creationSource: "web" as const,
+    };
+    const uiError = yield* service
+      .dispatch({
+        ...common,
+        type: "message.dispatch",
+        dispatchMode: { type: "start_immediately" },
+      })
+      .pipe(Effect.flip);
+    expect(uiError._tag).toBe("OrchestratorDispatchError");
+    const mcpError = yield* service
+      .sendToThread({ ...common, projectId, mode: "auto" })
+      .pipe(Effect.flip);
+    expect(mcpError._tag).toBe("OrchestratorProjectionError");
+    expect(dispatched).toBe(false);
+  }).pipe(Effect.provide(testLayer));
+});

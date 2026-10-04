@@ -7,7 +7,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 
 /** Refresh only already-linked transcripts; unchanged files cost a stat, not a transcript read. */
-export const refreshImportedAgentThreads = Effect.fn("refreshImportedAgentThreads")(function* () {
+const refreshImportedAgentThreads = Effect.fn("refreshImportedAgentThreads")(function* () {
   const projectService = yield* ProjectService.ProjectService;
   const importer = yield* AgentSessionImporter.AgentSessionImporter;
   const projects = yield* projectService.listShells();

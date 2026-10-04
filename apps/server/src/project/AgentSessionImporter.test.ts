@@ -18,7 +18,8 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
-import * as ProjectService from "./ProjectService.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 
 const projectId = ProjectId.make("agent-session-import-project");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -38,6 +39,7 @@ it.effect("imports messages once and preserves the provider native resume bindin
   ];
   const scanner = AgentSessionScanner.AgentSessionScanner.of({
     scan: Effect.die("unused"),
+    readCodexThread: () => Effect.die("unused"),
     recentThreads: () =>
       Stream.succeed({
         _tag: "Importable",
@@ -68,8 +70,8 @@ it.effect("imports messages once and preserves the provider native resume bindin
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
-        Layer.mock(ProjectService.ProjectService)({
-          getById: () =>
+        Layer.mock(ProjectStore.ProjectStoreV2)({
+          get: () =>
             Effect.succeed(
               Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
             ),
@@ -87,6 +89,8 @@ it.effect("imports messages once and preserves the provider native resume bindin
                     .flat()
                     .filter((event) => event.type === "turn-item.updated")
                     .map((event) => event.payload),
+                  providerTurns: [],
+                  contextHandoffs: [],
                   runs: busy ? [{ status: "running" }] : [],
                   providerThreads: switched
                     ? []
@@ -110,6 +114,7 @@ it.effect("imports messages once and preserves the provider native resume bindin
           upsert: (input) => Effect.sync(() => void upserts.push(input)),
           recordImportedTranscript: (input) => Effect.sync(() => void recorded.push(input)),
         }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ detach: () => Effect.void }),
         IdAllocator.layer,
         ThreadCommandExecutor.layer,
       ),
@@ -265,13 +270,19 @@ it.effect.each(["codex", "claudeAgent"] as const)(
                 },
               }),
           }),
-          Layer.mock(ProjectService.ProjectService)({
-            getById: () =>
+          Layer.mock(ProjectStore.ProjectStoreV2)({
+            get: () =>
               Effect.succeed(
                 Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
               ),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadShell: () =>
+              Effect.succeed({
+                projectId,
+                activeRunId: null,
+                activeProviderThreadId: null,
+              } as never),
             getThreadRecords: () =>
               Effect.succeed({
                 thread: {
@@ -296,6 +307,8 @@ it.effect.each(["codex", "claudeAgent"] as const)(
                     .filter((event) => event.type === "turn-item.updated")
                     .map((event) => event.payload),
                 ],
+                providerTurns: [],
+                contextHandoffs: [],
                 runs: hasRun ? [{ status: "completed" }] : [],
                 providerThreads: [],
               } as never),
@@ -311,6 +324,9 @@ it.effect.each(["codex", "claudeAgent"] as const)(
             list: () => Effect.succeed([runtime()]),
             getByThreadId: () => Effect.succeed(Option.some(runtime())),
             recordImportedTranscript: (input) => Effect.sync(() => void recorded.push(input)),
+          }),
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+            detach: () => Effect.void,
           }),
           IdAllocator.layer,
           ThreadCommandExecutor.layer,
@@ -353,6 +369,14 @@ it.effect.each(["codex", "claudeAgent"] as const)(
       expect(yield* refresh()).toEqual({ importedCount: 1, skippedCount: 0 });
       expect(writes).toHaveLength(1);
       expect(recorded).toHaveLength(2);
+      if (source === "codex") {
+        yield* importer.refreshThread(importedId, { forReply: true });
+        const binding = writes.flat().find((event) => event.type === "provider-thread.updated");
+        expect(binding?.payload).toMatchObject({
+          nativeThreadRef: { driver: "codex", nativeId },
+          nativeMetadata: { sharedHistory: true },
+        });
+      }
     }).pipe(Effect.provide(testLayer));
   },
 );

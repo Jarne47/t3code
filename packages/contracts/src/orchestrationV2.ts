@@ -826,6 +826,8 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** Preserve native identity after successfully linking its on-disk history across clients. */
+  sharedHistory: Schema.optional(Schema.Boolean),
   /** Version 2 scopes provider-derived item ids by provider instance. */
   itemIdentityVersion: Schema.optional(Schema.Literal(2)),
 });

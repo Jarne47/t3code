@@ -5067,22 +5067,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             driver: adapter.driver,
             nativeThreadId: `pending:${runId}`,
           });
-        const legacyImportHandoff = shouldPrepareLegacyImportHandoff({
-          historyOrigin: projection.thread.historyOrigin,
-          hasCompletedRun: latestCompletedRun !== undefined,
-          legacyImportItemCount: legacyImportItems.length,
-        })
-          ? yield* contextHandoffService
-              .prepareLegacyImport({
-                threadId: command.threadId,
-                targetRunId: runId,
-                toProviderThreadId: providerThreadId,
-                toProviderInstanceId: modelSelection.instanceId,
-                items: legacyImportItems,
-                createdAt: now,
-              })
-              .pipe(mapDispatchError(command))
-          : null;
+        const legacyImportHandoff =
+          activeProviderThread?.nativeThreadRef == null &&
+          shouldPrepareLegacyImportHandoff({
+            historyOrigin: projection.thread.historyOrigin,
+            hasCompletedRun: latestCompletedRun !== undefined,
+            legacyImportItemCount: legacyImportItems.length,
+          })
+            ? yield* contextHandoffService
+                .prepareLegacyImport({
+                  threadId: command.threadId,
+                  targetRunId: runId,
+                  toProviderThreadId: providerThreadId,
+                  toProviderInstanceId: modelSelection.instanceId,
+                  items: legacyImportItems,
+                  createdAt: now,
+                })
+                .pipe(mapDispatchError(command))
+            : null;
         const providerThread: OrchestrationV2ProviderThread =
           activeProviderThread === undefined
             ? {

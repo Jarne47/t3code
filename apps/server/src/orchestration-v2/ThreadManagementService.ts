@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 
 import * as Orchestrator from "./Orchestrator.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -271,6 +272,14 @@ export interface ThreadManagementServiceShape {
   readonly ensureLegacyTranscript: (
     threadId: ThreadId,
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
+  readonly refreshTranscript: (
+    threadId: ThreadId,
+    options?: { readonly forReply?: boolean },
+  ) => Effect.Effect<
+    void,
+    | LegacyV1ThreadImporter.LegacyV1ThreadImportError
+    | AgentSessionImporter.AgentSessionThreadRefreshError
+  >;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, Orchestrator.OrchestratorV2Error>;
@@ -378,6 +387,7 @@ function latestSteerableRun(
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+  const sessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
 
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
@@ -403,12 +413,28 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const refreshTranscript: ThreadManagementServiceShape["refreshTranscript"] = (
+    threadId,
+    options,
+  ) =>
+    ensureLegacyTranscript(threadId).pipe(
+      Effect.andThen(sessionImporter.refreshThread(threadId, options)),
+    );
+
+  const refreshProjectionTranscript = (threadId: ThreadId) =>
+    refreshTranscript(threadId).pipe(
+      Effect.mapError((cause) => new Orchestrator.OrchestratorProjectionError({ threadId, cause })),
+    );
+
   const ensureCommandTranscripts = Effect.fn(
     "orchestrationV2.threadManagement.ensureCommandTranscripts",
   )(function* (command: OrchestrationV2ServerCommand) {
     yield* Effect.forEach(
       existingThreadIdsForCommand(command),
-      (threadId) => ensureLegacyTranscript(threadId),
+      (threadId) =>
+        command.type === "message.dispatch"
+          ? refreshTranscript(threadId, { forReply: true })
+          : ensureLegacyTranscript(threadId),
       { discard: true },
     ).pipe(
       Effect.mapError(
@@ -433,14 +459,14 @@ const make = Effect.gen(function* () {
     );
 
   const getThreadSnapshot: ThreadManagementServiceShape["getThreadSnapshot"] = (threadId) =>
-    ensureProjectionTranscript(threadId).pipe(
+    refreshProjectionTranscript(threadId).pipe(
       Effect.andThen(orchestrator.getThreadSnapshot(threadId)),
     );
   const getThreadSnapshotWindow: ThreadManagementServiceShape["getThreadSnapshotWindow"] = (
     threadId,
     options,
   ) =>
-    ensureProjectionTranscript(threadId).pipe(
+    refreshProjectionTranscript(threadId).pipe(
       Effect.andThen(orchestrator.getThreadSnapshotWindow(threadId, options)),
     );
 
@@ -530,6 +556,12 @@ const make = Effect.gen(function* () {
         });
       }
 
+      yield* refreshTranscript(input.threadId, { forReply: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new Orchestrator.OrchestratorProjectionError({ threadId: input.threadId, cause }),
+        ),
+      );
       const steerableRun = latestSteerableRun(target);
       let dispatchMode: Extract<
         OrchestrationV2Command,
@@ -712,6 +744,7 @@ const make = Effect.gen(function* () {
 
   return ThreadManagementService.of({
     ensureLegacyTranscript,
+    refreshTranscript,
     dispatch,
     getTimelinePage: (threadId, options) =>
       ensureProjectionTranscript(threadId).pipe(
@@ -756,11 +789,19 @@ const legacyV1ThreadImporterNoopLayer = Layer.succeed(
   }),
 );
 
-export const layer: Layer.Layer<ThreadManagementService, never, Orchestrator.OrchestratorV2> =
-  Layer.effect(ThreadManagementService, make).pipe(Layer.provide(legacyV1ThreadImporterNoopLayer));
+const agentSessionImporterNoopLayer = Layer.succeed(
+  AgentSessionImporter.AgentSessionImporter,
+  AgentSessionImporter.AgentSessionImporter.of({
+    refreshThread: () => Effect.succeed(undefined),
+    importRecentAgentThreads: () => Effect.succeed({ importedCount: 0, skippedCount: 0 }),
+  }),
+);
 
-export const layerWithLegacyImporter: Layer.Layer<
-  ThreadManagementService,
-  never,
-  LegacyV1ThreadImporter.LegacyV1ThreadImporter | Orchestrator.OrchestratorV2
-> = Layer.effect(ThreadManagementService, make);
+export const layerWithSessionImporter = Layer.effect(ThreadManagementService, make);
+
+export const layerWithLegacyImporter = layerWithSessionImporter.pipe(
+  Layer.provide(agentSessionImporterNoopLayer),
+);
+
+export const layer: Layer.Layer<ThreadManagementService, never, Orchestrator.OrchestratorV2> =
+  layerWithLegacyImporter.pipe(Layer.provide(legacyV1ThreadImporterNoopLayer));

@@ -178,6 +178,8 @@ export interface ProviderSessionManagerV2Shape {
      * potential re-attach.
      */
     readonly revokeMcpCredential?: boolean;
+    /** History refresh cannot proceed while the provider retains stale native context. */
+    readonly requireUnload?: boolean;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
 }
 
@@ -1958,7 +1960,10 @@ export const layerWithOptions = (
             }
             const detached = yield* Ref.modify(sessions, (current) => {
               const entry = current.get(key);
-              if (entry === undefined || !entry.attachedThreadIds.has(input.threadId)) {
+              if (
+                entry === undefined ||
+                (!input.requireUnload && !entry.attachedThreadIds.has(input.threadId))
+              ) {
                 return [Option.none<LiveSessionEntry>(), current] as const;
               }
               const attachedThreadIds = new Set(entry.attachedThreadIds);
@@ -2043,15 +2048,22 @@ export const layerWithOptions = (
                         // thread's next attach.
                         Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
                         Effect.catchCause((cause) =>
-                          Effect.logWarning(
-                            "orchestration-v2.driver-session.detach-unload-failed",
-                            {
-                              providerSessionId: input.providerSessionId,
-                              threadId: input.threadId,
-                              providerThreadId: providerThread.id,
-                              cause,
-                            },
-                          ),
+                          input.requireUnload
+                            ? Effect.fail(
+                                new ProviderSessionCloseError({
+                                  providerSessionId: input.providerSessionId,
+                                  cause,
+                                }),
+                              )
+                            : Effect.logWarning(
+                                "orchestration-v2.driver-session.detach-unload-failed",
+                                {
+                                  providerSessionId: input.providerSessionId,
+                                  threadId: input.threadId,
+                                  providerThreadId: providerThread.id,
+                                  cause,
+                                },
+                              ),
                         ),
                       ),
                     { concurrency: 1, discard: true },

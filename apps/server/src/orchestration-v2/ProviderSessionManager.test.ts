@@ -3194,9 +3194,9 @@ it.effect(
     }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 re-attaching a thread waits for its in-flight unload, then reloads it",
-  () =>
+it.effect.each([false, true])(
+  "ProviderSessionManagerV2 re-attaching a thread waits for its in-flight unload, then reloads it (failed unload: %s)",
+  (failFirstUnload) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const unloadStarted = yield* Deferred.make<void>();
@@ -3205,7 +3205,9 @@ it.effect(
       let resumesBeforeUnload: number | undefined;
       // The unload parks after detach removed the attachment, leaving the
       // window in which the same thread's next turn re-attaches it.
+      let calls = 0;
       const beforeUnload = Effect.gen(function* () {
+        if (failFirstUnload && calls++ === 0) return yield* Effect.die("unload failed");
         yield* Deferred.succeed(unloadStarted, undefined);
         yield* Deferred.await(releaseUnload);
         resumesBeforeUnload = (yield* Ref.get(state)).resumeCount;
@@ -3271,8 +3273,14 @@ it.effect(
         });
         yield* resume;
 
+        if (failFirstUnload) {
+          const error = yield* manager
+            .detach({ providerSessionId, threadId, requireUnload: true })
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "ProviderSessionReleaseError");
+        }
         const detach = yield* manager
-          .detach({ providerSessionId, threadId })
+          .detach({ providerSessionId, threadId, requireUnload: true })
           .pipe(Effect.forkScoped);
         yield* Deferred.await(unloadStarted);
         // The same thread's next turn re-attaches while the unload is parked.

@@ -3278,3 +3278,82 @@ describe("parseAgentSessionTranscript", () => {
     expect(thread?.messages.at(-1)?.text).toBe("Assistant update 249");
   });
 });
+
+it.effect(
+  "reads the complete linked Codex transcript beyond initial-import limits and validates native identity",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const base = yield* fs.makeTempDirectoryScoped();
+      const nativeId = "01a0aa9c-d1e2-7c92-b569-fe56e5e8f83f";
+      const home = `${base}/codex`;
+      const directory = `${home}/sessions/2020/01/01`;
+      const file = `${directory}/rollout-2020-01-01T10-00-00-${nativeId}.jsonl`;
+      yield* fs.makeDirectory(directory, { recursive: true });
+      const contents = [
+        { type: "session_meta", payload: { id: nativeId, cwd: "/old/worktree" } },
+        ...Array.from({ length: 210 }, (_, index) => [
+          { type: "event_msg", payload: { type: "task_started", turn_id: `turn-${index}` } },
+          { type: "event_msg", payload: { type: "user_message", message: `Prompt ${index}` } },
+          {
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "assistant",
+              id: `item-${index}`,
+              content: [{ type: "output_text", text: `Reply ${index}` }],
+            },
+          },
+          { type: "event_msg", payload: { type: "task_complete", turn_id: `turn-${index}` } },
+        ]).flat(),
+      ];
+      yield* fs.writeFileString(
+        file,
+        contents.map((record) => encodeTranscriptRecord(record)).join("\n") + "\n",
+      );
+      yield* Effect.gen(function* () {
+        const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+        const result = yield* scanner.readCodexThread(ProviderInstanceId.make("codex"), nativeId);
+        expect(result._tag).toBe("Importable");
+        if (result._tag !== "Importable") return;
+        expect(result.thread.messages).toHaveLength(420);
+        expect(result.thread.messages.at(-1)).toMatchObject({
+          text: "Reply 209",
+          nativeItemId: "item-209",
+          nativeTurnId: "turn-209",
+        });
+        expect(result.thread.activeTurnId).toBeUndefined();
+        expect(
+          (yield* scanner.readCodexThread(
+            ProviderInstanceId.make("codex"),
+            nativeId,
+            result.source,
+          ))._tag,
+        ).toBe("AlreadyImported");
+        yield* fs.writeFileString(
+          file,
+          encodeTranscriptRecord({
+            type: "session_meta",
+            payload: { id: "different-session" },
+          }) +
+            "\n" +
+            encodeTranscriptRecord({
+              type: "event_msg",
+              payload: { type: "user_message", message: "Other conversation" },
+            }) +
+            "\n",
+        );
+        expect(
+          (yield* scanner.readCodexThread(
+            ProviderInstanceId.make("codex"),
+            nativeId,
+            result.source,
+          ))._tag,
+        ).toBe("Skipped");
+      }).pipe(
+        Effect.provide(
+          makeScannerTestLayer({ codexHomePath: home, claudeHomePath: `${base}/claude` }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
