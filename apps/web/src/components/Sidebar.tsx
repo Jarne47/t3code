@@ -5303,6 +5303,7 @@ export default function Sidebar() {
                                     activeProjectOrder,
                                   ).map((group) => ({
                                     ...group,
+                                    project: projectGroupByScopeKey.get(group.key) ?? null,
                                     children: group.threads.map((row) =>
                                       renderThreadRowInner(row, "active"),
                                     ),

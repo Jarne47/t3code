@@ -18,11 +18,14 @@ import { CSS } from "@dnd-kit/utilities";
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GripVerticalIcon } from "lucide-react";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { resolveProjectExpanded, useUiStateStore } from "../../uiStateStore";
+import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { reorderActiveProjectGroups } from "./activeThreadSort";
 
 interface ProjectGroup {
   key: string;
   label: string;
+  // Missing for threads whose project is unavailable; those keep a plain folder icon.
+  project?: ProjectFaviconProject | null | undefined;
   children: readonly ReactNode[];
 }
 
@@ -63,7 +66,11 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
           ) : (
             <ChevronRightIcon aria-hidden className="size-3.5 shrink-0" />
           )}
-          <FolderIcon aria-hidden className="size-3.5 shrink-0" />
+          {group.project ? (
+            <ProjectFavicon project={group.project} className="size-3.5 shrink-0" />
+          ) : (
+            <FolderIcon aria-hidden className="size-3.5 shrink-0" />
+          )}
           <span className="min-w-0 flex-1 truncate">{group.label}</span>
           <span className="tabular-nums">{group.children.length}</span>
         </button>
