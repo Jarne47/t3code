@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { ProviderInstanceId } from "@t3tools/contracts";
 import { useUiStateStore } from "../../uiStateStore";
 import { ActiveProjectGroups } from "./ActiveProjectGroups";
 
@@ -35,13 +36,16 @@ const groups = [
         <button>Settle</button>
       </li>
     )),
+    statusThreads: [],
   },
 ];
-async function render() {
+async function render(
+  renderedGroups: Parameters<typeof ActiveProjectGroups>[0]["groups"] = groups,
+) {
   await act(async () =>
     root.render(
       <ul>
-        <ActiveProjectGroups groups={groups} />
+        <ActiveProjectGroups groups={renderedGroups} />
       </ul>,
     ),
   );
@@ -77,4 +81,38 @@ it("persists folding independently of dragging and restores it when remounted", 
   ).toBe("false");
   await click("Expand project Example");
   expect(container.querySelectorAll("[data-thread]")).toHaveLength(5);
+});
+it("keeps the most urgent thread status on the folder header while collapsed", async () => {
+  const quiet = {
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    interactionMode: "default" as const,
+    latestRun: null,
+    runtime: null,
+  };
+  const working = {
+    ...quiet,
+    runtime: {
+      status: "running" as const,
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: "2026-03-09T10:00:00.000Z",
+    },
+  };
+  // The working thread sits beyond the five visible rows.
+  const statusThreads = [quiet, quiet, quiet, quiet, quiet, working].map((thread, index) => ({
+    key: `thread-${index}`,
+    thread,
+    wokeAt: null,
+  }));
+  await render([{ ...groups[0]!, statusThreads }]);
+  expect(
+    container.querySelector('[aria-label="Collapse project Example, Working"]'),
+  ).not.toBeNull();
+  await click("Collapse project Example, Working");
+  expect(container.querySelectorAll("[data-thread]")).toHaveLength(0);
+  expect(container.querySelector('[aria-label="Expand project Example, Working"]')).not.toBeNull();
 });

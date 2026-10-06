@@ -26,6 +26,7 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import { parseTimestampDate } from "../timestampFormat";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -1036,6 +1037,88 @@ export function resolveSidebarV2TopStatus(input: {
     return "woke";
   }
   return input.isUnread ? "done" : null;
+}
+
+// Status hues follow the system-wide convention set by sidebar v1 and the
+// mobile Live Activity/widgets (amber approval, indigo input, sky working)
+// so a thread reads the same color everywhere it surfaces.
+export const SIDEBAR_V2_TOP_STATUS_PRESENTATION: Record<
+  SidebarV2TopStatusKind,
+  { readonly label: string; readonly className: string }
+> = {
+  // No shimmer: a label that animates forever is noise in a sidebar full of
+  // them (and repaints every vsync on high-refresh displays).
+  working: { label: "Working", className: "text-info" },
+  // Waiting is calm background presence (post-settle background roster), not
+  // active progress, so the label keeps full strength.
+  waiting: { label: "Waiting", className: "text-muted-foreground" },
+  approval: { label: "Approval", className: "text-warning-foreground" },
+  input: { label: "Input", className: "text-indigo-600 dark:text-indigo-300" },
+  limited: { label: "Limited", className: "text-warning" },
+  failed: { label: "Failed", className: "text-error" },
+  woke: { label: "Woke", className: "text-warning" },
+  done: { label: "Done", className: "text-success" },
+};
+
+// Most urgent first: what needs the user outranks what is merely in flight.
+const SIDEBAR_V2_GROUP_STATUS_PRIORITY: Record<SidebarV2TopStatusKind, number> = {
+  approval: 7,
+  input: 6,
+  failed: 5,
+  limited: 4,
+  working: 3,
+  woke: 2,
+  done: 1,
+  waiting: 0,
+};
+
+/** A wake stays visible until a visit after it; an unparseable visit counts as never-visited. */
+export function isSidebarThreadWoke(input: {
+  readonly wokeAt: string | null;
+  readonly lastVisitedAt: string | undefined;
+  readonly settledOverride: string | null | undefined;
+}): boolean {
+  const wokeAtDate = input.wokeAt === null ? null : parseTimestampDate(input.wokeAt);
+  const lastVisitedDate =
+    input.lastVisitedAt === undefined ? null : parseTimestampDate(input.lastVisitedAt);
+  return (
+    wokeAtDate !== null &&
+    (lastVisitedDate === null || lastVisitedDate < wokeAtDate) &&
+    input.settledOverride !== "settled"
+  );
+}
+
+export type SidebarV2StatusThread = SidebarThreadStatusInput &
+  ThreadStatusInput & { readonly settledOverride?: string | null | undefined };
+
+/** The most urgent row status among a project folder's threads, for its header. */
+export function resolveSidebarV2GroupStatus(
+  threads: ReadonlyArray<{
+    readonly thread: SidebarV2StatusThread;
+    readonly lastVisitedAt: string | undefined;
+    readonly wokeAt: string | null;
+  }>,
+): SidebarV2TopStatusKind | null {
+  let top: SidebarV2TopStatusKind | null = null;
+  for (const { thread, lastVisitedAt, wokeAt } of threads) {
+    const kind = resolveSidebarV2TopStatus({
+      status: resolveSidebarThreadStatus(thread),
+      isUnread: hasUnseenCompletion({ ...thread, lastVisitedAt }),
+      isWoke: isSidebarThreadWoke({
+        wokeAt,
+        lastVisitedAt,
+        settledOverride: thread.settledOverride,
+      }),
+    });
+    if (
+      kind !== null &&
+      (top === null ||
+        SIDEBAR_V2_GROUP_STATUS_PRIORITY[kind] > SIDEBAR_V2_GROUP_STATUS_PRIORITY[top])
+    ) {
+      top = kind;
+    }
+  }
+  return top;
 }
 
 export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {

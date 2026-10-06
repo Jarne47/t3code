@@ -17,9 +17,17 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GripVerticalIcon } from "lucide-react";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
+import { cn } from "../../lib/utils";
 import { resolveProjectExpanded, useUiStateStore } from "../../uiStateStore";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
+import {
+  resolveSidebarV2GroupStatus,
+  resolveThreadLastVisitedAt,
+  SIDEBAR_V2_TOP_STATUS_PRESENTATION,
+  type SidebarV2StatusThread,
+} from "../Sidebar.logic";
 import { reorderActiveProjectGroups } from "./activeThreadSort";
+import { SidebarV2StatusIcon } from "./SidebarV2StatusIcon";
 
 interface ProjectGroup {
   key: string;
@@ -27,6 +35,12 @@ interface ProjectGroup {
   // Missing for threads whose project is unavailable; those keep a plain folder icon.
   project?: ProjectFaviconProject | null | undefined;
   children: readonly ReactNode[];
+  /** Every thread in the folder, including rows behind "See more", for the header status. */
+  statusThreads: readonly {
+    readonly key: string;
+    readonly thread: SidebarV2StatusThread;
+    readonly wokeAt: string | null;
+  }[];
 }
 
 function SortableProjectGroup({ group }: { group: ProjectGroup }) {
@@ -34,6 +48,20 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
     resolveProjectExpanded(state.projectExpandedById, [group.key]),
   );
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
+  // Shown expanded and collapsed alike, so a folded project still says it needs you.
+  const statusKind = useUiStateStore((state) =>
+    resolveSidebarV2GroupStatus(
+      group.statusThreads.map(({ key, thread, wokeAt }) => ({
+        thread,
+        wokeAt,
+        lastVisitedAt: resolveThreadLastVisitedAt(
+          thread.lastVisitedAt,
+          state.threadLastVisitedAtById[key],
+        ),
+      })),
+    ),
+  );
+  const status = statusKind === null ? null : SIDEBAR_V2_TOP_STATUS_PRESENTATION[statusKind];
   const [showAll, setShowAll] = useState(false);
   const listId = useId();
   const visibleChildren = showAll ? group.children : group.children.slice(0, 5);
@@ -57,7 +85,9 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
           type="button"
           aria-expanded={expanded}
           aria-controls={listId}
-          aria-label={`${expanded ? "Collapse" : "Expand"} project ${group.label}`}
+          aria-label={`${expanded ? "Collapse" : "Expand"} project ${group.label}${
+            status ? `, ${status.label}` : ""
+          }`}
           onClick={() => setProjectExpanded(group.key, !expanded)}
           className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring"
         >
@@ -72,6 +102,12 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
             <FolderIcon aria-hidden className="size-3.5 shrink-0" />
           )}
           <span className="min-w-0 flex-1 truncate">{group.label}</span>
+          {statusKind !== null && status !== null ? (
+            <span className={cn("inline-flex shrink-0 items-center gap-1", status.className)}>
+              <SidebarV2StatusIcon kind={statusKind} className="size-3.5 shrink-0" />
+              {status.label}
+            </span>
+          ) : null}
           <span className="tabular-nums">{group.children.length}</span>
         </button>
         <button

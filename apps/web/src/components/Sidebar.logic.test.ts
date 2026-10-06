@@ -35,6 +35,7 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
   resolveSidebarThreadStatus,
+  resolveSidebarV2GroupStatus,
   resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
   resolveThreadRowClassName,
@@ -59,6 +60,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  type SidebarV2StatusThread,
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
@@ -991,6 +993,50 @@ describe("resolveSidebarThreadStatus", () => {
   it("keeps Waiting static while Working shows elapsed duration", () => {
     expect(shouldShowSidebarV2Duration("waiting")).toBe(false);
     expect(shouldShowSidebarV2Duration("working")).toBe(true);
+  });
+
+  describe("resolveSidebarV2GroupStatus", () => {
+    const quiet = {
+      ...idle,
+      hasActionableProposedPlan: false,
+      interactionMode: "default" as const,
+      latestRun: null,
+    };
+    const entry = (thread: SidebarV2StatusThread, lastVisitedAt?: string) => ({
+      thread,
+      lastVisitedAt,
+      wokeAt: null,
+    });
+
+    it("surfaces the most urgent thread status for the folder", () => {
+      const working = entry({ ...quiet, runtime });
+      const input = entry({ ...quiet, hasPendingUserInput: true });
+      const done = entry({ ...quiet, latestRun: makeLatestRun() }, "2026-03-09T10:04:00.000Z");
+      expect(resolveSidebarV2GroupStatus([entry(quiet), done])).toBe("done");
+      expect(resolveSidebarV2GroupStatus([done, working])).toBe("working");
+      expect(resolveSidebarV2GroupStatus([working, input, done])).toBe("input");
+      expect(
+        resolveSidebarV2GroupStatus([input, entry({ ...quiet, hasPendingApprovals: true })]),
+      ).toBe("approval");
+    });
+
+    it("stays empty when no thread shows a status", () => {
+      expect(resolveSidebarV2GroupStatus([])).toBeNull();
+      expect(
+        resolveSidebarV2GroupStatus([
+          entry(quiet),
+          entry({ ...quiet, latestRun: makeLatestRun() }, "2026-03-09T10:06:00.000Z"),
+        ]),
+      ).toBeNull();
+    });
+
+    it("counts a wake until the thread is visited after it", () => {
+      const woke = { thread: quiet, wokeAt: "2026-03-09T11:00:00.000Z" };
+      expect(resolveSidebarV2GroupStatus([{ ...woke, lastVisitedAt: undefined }])).toBe("woke");
+      expect(
+        resolveSidebarV2GroupStatus([{ ...woke, lastVisitedAt: "2026-03-09T11:01:00.000Z" }]),
+      ).toBeNull();
+    });
   });
 });
 

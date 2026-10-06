@@ -2380,7 +2380,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           onKeyDown={handleProjectButtonKeyDown}
           onContextMenu={handleProjectButtonContextMenu}
         >
-          {!projectExpanded && projectStatus ? (
+          {/* The status dot holds the chevron's slot expanded or collapsed, so
+            a project keeps saying it needs you either way; hover reveals the
+            chevron. */}
+          {projectStatus ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -2397,7 +2400,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                     }`}
                   />
                 </span>
-                <ChevronRightIcon className="absolute inset-0 m-auto size-3.5 text-icon-muted opacity-0 transition-opacity duration-150 group-hover/project-header:opacity-100" />
+                <ChevronRightIcon
+                  className={`absolute inset-0 m-auto size-3.5 text-icon-muted opacity-0 transition-opacity duration-150 group-hover/project-header:opacity-100 ${
+                    projectExpanded ? "rotate-90" : ""
+                  }`}
+                />
               </TooltipTrigger>
               <TooltipPopup side="top">{projectStatus.label}</TooltipPopup>
             </Tooltip>
