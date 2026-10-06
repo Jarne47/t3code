@@ -31,13 +31,13 @@ class MaintenanceTest(unittest.TestCase):
         (self.repo / 'content').write_text('base\n')
         self.commit('base')
         self.base = self.git('rev-parse', 'HEAD')
-        for name in ('personal', 'upstream'):
+        for name in ('origin', 'official'):
             self.command('git', 'init', '--bare', str(self.root / name))
             self.git('remote', 'add', name, str(self.root / name))
         self.branch = 'main'
         self.git('branch', 'upstream-fixture')
-        self.git('push', 'personal', self.branch)
-        self.git('push', 'upstream', 'main')
+        self.git('push', 'origin', self.branch)
+        self.git('push', 'official', 'main')
         self.binary = self.root / 'bin'
         self.binary.mkdir()
         vp = self.binary / 'vp'
@@ -60,7 +60,7 @@ class MaintenanceTest(unittest.TestCase):
         if fail:
             (self.repo / 'fail-check').touch()
         self.commit('upstream change')
-        self.git('push', 'upstream', 'HEAD:main')
+        self.git('push', 'official', 'HEAD:main')
         self.git('checkout', self.branch)
 
     def run_maintenance(self):
@@ -73,7 +73,7 @@ class MaintenanceTest(unittest.TestCase):
         return code, json.loads((self.state / 'latest.json').read_text())
 
     def remote_tip(self):
-        return self.git('ls-remote', 'personal', 'refs/heads/' + self.branch).split()[0]
+        return self.git('ls-remote', 'origin', 'refs/heads/' + self.branch).split()[0]
 
     def test_no_updates(self):
         code, result = self.run_maintenance()
@@ -104,7 +104,7 @@ class MaintenanceTest(unittest.TestCase):
         self.advance_upstream()
         # Simulate another process publishing work while candidate checks run.
         (self.binary / 'vp').write_text(
-            '#!/bin/sh\ngit -C ' + shlex.quote(str(self.repo)) + ' push personal ' + self.branch + '\n'
+            '#!/bin/sh\ngit -C ' + shlex.quote(str(self.repo)) + ' push origin ' + self.branch + '\n'
         )
         code, result = self.run_maintenance()
         self.assertEqual((code, result['status']), (1, 'failed'))
@@ -114,7 +114,7 @@ class MaintenanceTest(unittest.TestCase):
     def test_conflict_does_not_push_or_touch_checkout(self):
         (self.repo / 'content').write_text('fork change\n')
         self.commit('fork change')
-        self.git('push', 'personal', self.branch)
+        self.git('push', 'origin', self.branch)
         tip = self.remote_tip()
         self.advance_upstream(conflict=True)
         code, result = self.run_maintenance()

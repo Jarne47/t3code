@@ -1,6 +1,6 @@
 # Personal sidebar fork
 
-This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Customizations live on the default branch, `main`. The `personal` remote is the fork and `upstream` is the original repository; `upstream/main` remains the unmodified upstream reference. The former `itamar/sidebar-customizations` branch is retained for historical reference.
+This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Customizations live on the default branch, `main`. The `origin` remote is the fork and `official` is the original repository; `official/main` remains the unmodified upstream reference. Use these names so T3 groups fork checkouts across computers under `Jarne47/t3code`. The former `itamar/sidebar-customizations` branch is retained for historical reference.
 
 ## Download
 
@@ -75,11 +75,11 @@ With a clean working tree on `main`:
 
 This merges upstream `main`, installs locked dependencies, runs focused checks, and builds the web client. You can supply an upstream release tag instead of `main`. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
 
-The command first fast-forwards from the personal fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push personal HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package uses its own release updater, so official updates cannot replace the customizations.
+The command first fast-forwards from the personal fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push origin HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package uses its own release updater, so official updates cannot replace the customizations.
 
 ## Weekly maintenance on this Mac
 
-The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches upstream `main`, merges into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `personal/main`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
+The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches `official/main`, merges into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `origin/main`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
 
 Latest results and command output are in `~/Library/Application Support/t3code-maintenance/latest.json` and `latest.log`. macOS notifications are attempted when updates succeed or need attention, subject to notification settings. The task requires this Mac and your logged-in session; a scheduled run missed during sleep runs on wake, while one missed during shutdown waits for the next Sunday. No changes means no dependency install or tests are needed.
 

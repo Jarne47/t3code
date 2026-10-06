@@ -36,11 +36,11 @@ def maintain(repo, state):
 
             try:
                 branch = "main"
-                personal_ref = f"refs/remotes/personal/{branch}"
-                upstream_ref = "refs/remotes/upstream/main"
-                run("git", "fetch", "personal", f"refs/heads/{branch}:{personal_ref}")
+                personal_ref = f"refs/remotes/origin/{branch}"
+                upstream_ref = "refs/remotes/official/main"
+                run("git", "fetch", "origin", f"refs/heads/{branch}:{personal_ref}")
                 base = run("git", "rev-parse", personal_ref, capture=True)
-                run("git", "fetch", "upstream", f"refs/heads/main:{upstream_ref}")
+                run("git", "fetch", "official", f"refs/heads/main:{upstream_ref}")
                 upstream = run("git", "rev-parse", upstream_ref, capture=True)
                 result.update(base=base, upstream=upstream)
                 pending = run("git", "rev-list", "--count", f"{base}..{upstream}", capture=True)
@@ -60,7 +60,7 @@ def maintain(repo, state):
                                 raise RuntimeError("Checks modified tracked files; refusing to push.")
                             revision = run("git", "rev-parse", "HEAD", cwd=candidate, capture=True)
                             # Normal push rejects concurrent, incompatible updates to the fork.
-                            run("git", "push", "personal", f"HEAD:refs/heads/{branch}", cwd=candidate)
+                            run("git", "push", "origin", f"HEAD:refs/heads/{branch}", cwd=candidate)
                             result.update(status="updated", revision=revision, commits=int(pending),
                                           message="Verified updates pushed to private fork. Run fork-update.sh to sync your checkout; desktop build/install is separate.")
                         finally:

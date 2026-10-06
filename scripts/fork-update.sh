@@ -14,9 +14,9 @@ upstream_ref="${1:-main}"
 git check-ref-format --allow-onelevel "$upstream_ref" >/dev/null
 # Weekly maintenance pushes verified merges without changing this checkout.
 fork_branch="$(git branch --show-current)"
-git fetch personal "$fork_branch"
+git fetch origin "$fork_branch"
 git merge --ff-only FETCH_HEAD
-git fetch upstream "$upstream_ref"
+git fetch official "$upstream_ref"
 if ! git merge --no-edit FETCH_HEAD; then
   echo "Resolve the merge conflicts and run scripts/fork-check.sh, or use git merge --abort." >&2
   exit 1
