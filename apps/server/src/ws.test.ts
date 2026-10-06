@@ -14,7 +14,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
-import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
+import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -22,7 +22,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import {
