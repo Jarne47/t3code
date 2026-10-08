@@ -1,6 +1,7 @@
 import { Spinner } from "~/components/ui/spinner";
 import {
   AuthPreviewOperateScope,
+  AuthOrchestrationOperateScope,
   type EditorId,
   type EnvironmentId,
   type ResolvedKeybindingsConfig,
@@ -1078,6 +1079,7 @@ export default function FilePreviewPanel({
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
+  const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const remoteOpenState = useRemoteOpenState(environmentId);
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
@@ -1332,6 +1334,7 @@ export default function FilePreviewPanel({
           remoteOpenState.mode === "local-exec" ? (
             <FileSurfaceAction
               label="Open in default app"
+              disabled={!canOperateHost}
               onPress={() => {
                 void openInDefaultApp({
                   environmentId,
