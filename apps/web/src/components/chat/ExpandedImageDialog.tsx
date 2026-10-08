@@ -27,10 +27,13 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ZoomableImage, type ZoomableImageHandle } from "./ZoomableImage";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import { cn } from "~/lib/utils";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
   onClose: () => void;
+  /** The file viewer fills the window and scales small media up to fit. */
+  fullScreen?: boolean;
 }
 
 const EXPANDED_MEDIA_STATE_CLASS_NAME =
@@ -44,15 +47,22 @@ function ExpandedMediaFailure({ children }: { children: ReactNode }) {
   );
 }
 
-function ExpandedVideo({ item }: { readonly item: ExpandedImageItem }) {
+function ExpandedVideo({
+  item,
+  fullScreen,
+}: {
+  readonly item: ExpandedImageItem;
+  readonly fullScreen: boolean;
+}) {
   const asset = item.actionsSource?.asset;
   const assetUrl = useAssetUrlState(asset?.environmentId ?? null, asset?.resource ?? null);
   const refreshAssetUrl = useAssetUrlRefresh(asset?.environmentId ?? null, asset?.resource ?? null);
-  const src = asset
-    ? assetUrl._tag === "Success"
-      ? assetUrl.url + (item.srcFragment ?? "")
-      : null
-    : item.src;
+  const src =
+    asset && !fullScreen
+      ? assetUrl._tag === "Success"
+        ? assetUrl.url + (item.srcFragment ?? "")
+        : null
+      : item.src;
   return (
     <MediaVideoPlayer
       src={src}
@@ -62,7 +72,10 @@ function ExpandedVideo({ item }: { readonly item: ExpandedImageItem }) {
       preload="metadata"
       autoPlay={item.autoPlay ?? true}
       className="block max-h-[var(--media-height)] max-w-[var(--media-width)] text-center"
-      videoClassName="aspect-auto max-h-[var(--media-height)] w-auto max-w-[var(--media-width)] rounded-lg border border-border/70 shadow-2xl"
+      videoClassName={cn(
+        "aspect-auto max-h-[var(--media-height)] w-auto max-w-[var(--media-width)] rounded-lg border border-border/70 shadow-2xl",
+        fullScreen && "h-[var(--media-height)] w-[var(--media-width)]",
+      )}
       stateClassName={EXPANDED_MEDIA_STATE_CLASS_NAME}
       onRetry={asset ? refreshAssetUrl : undefined}
     />
@@ -72,6 +85,7 @@ function ExpandedVideo({ item }: { readonly item: ExpandedImageItem }) {
 export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   preview,
   onClose,
+  fullScreen = false,
 }: ExpandedImageDialogProps) {
   const [imageOffset, setImageOffset] = useState(0);
   const [failedImageSrc, setFailedImageSrc] = useState<string | null>(null);
@@ -177,10 +191,15 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     >
       <DialogPopup
         {...composerFloatingLayerProps}
-        variant="media"
+        variant={fullScreen ? "media-fullscreen" : "media"}
         showCloseButton={false}
         bottomStickOnMobile={false}
-        className="row-start-1 max-h-[92vh] w-[92vw] max-w-[92vw] items-center overflow-visible [--media-width:92vw] [--media-height:min(86vh,calc(100vh-160px))] sm:[--media-width:calc(92vw-96px)]"
+        className={cn(
+          "items-center",
+          fullScreen
+            ? "[--media-width:calc(100vw-32px)] [--media-height:calc(100dvh-96px)]"
+            : "row-start-1 max-h-[92vh] w-[92vw] max-w-[92vw] overflow-visible [--media-width:92vw] [--media-height:min(86vh,calc(100vh-160px))] sm:[--media-width:calc(92vw-96px)]",
+        )}
         onKeyDown={onKeyDown}
         initialFocus={closeButtonRef}
         finalFocus={() => returnFocusTarget}
@@ -202,7 +221,12 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           </Button>
         )}
         <MediaActions source={actionsSource}>
-          <div className="relative isolate z-10 max-h-[92vh] max-w-[var(--media-width)]">
+          <div
+            className={cn(
+              "relative isolate z-10 max-w-[var(--media-width)]",
+              !fullScreen && "max-h-[92vh]",
+            )}
+          >
             <Button
               type="button"
               ref={closeButtonRef}
@@ -215,7 +239,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
               <XIcon />
             </Button>
             {item.type === "video" ? (
-              <ExpandedVideo key={index} item={item} />
+              <ExpandedVideo key={index} item={item} fullScreen={fullScreen} />
             ) : showingAccessibilityDetails ? (
               accessibilityDetails ? (
                 <SnapShotAccessibilityData
@@ -238,6 +262,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
                 key={`${index}:${item.src}`}
                 src={item.src}
                 name={item.name}
+                fullScreen={fullScreen}
                 onError={() => setFailedImageSrc(item.src)}
               />
             )}

@@ -20,11 +20,13 @@ export function ZoomableImage({
   name,
   onError,
   ref,
+  fullScreen = false,
 }: {
   src: string;
   name: string;
   onError: () => void;
   ref?: Ref<ZoomableImageHandle>;
+  fullScreen?: boolean;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
@@ -44,10 +46,17 @@ export function ZoomableImage({
   } | null>(null);
   const suppressClickRef = useRef(false);
   const [dragging, setDragging] = useState(false);
-  const maxHeight = Math.max(1, Math.min(windowSize.height * 0.86, windowSize.height - 160));
-  const fit = Math.min(
+  const maxHeight = Math.max(
     1,
-    (windowSize.width * 0.92 - (windowSize.width >= 640 ? 96 : 0)) / (naturalSize.width || 1),
+    fullScreen
+      ? windowSize.height - 96
+      : Math.min(windowSize.height * 0.86, windowSize.height - 160),
+  );
+  const fit = Math.min(
+    fullScreen ? Infinity : 1,
+    (fullScreen
+      ? windowSize.width - 32
+      : windowSize.width * 0.92 - (windowSize.width >= 640 ? 96 : 0)) / (naturalSize.width || 1),
     maxHeight / (naturalSize.height || 1),
   );
   const width = naturalSize.width * fit * zoom;

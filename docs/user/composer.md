@@ -298,6 +298,17 @@ Follow an agent's file link to read a report or other file outside the workspace
 These files open read-only. An HTML file outside the workspace cannot load scripts,
 styles, or images from neighboring files.
 
+## Media in the file viewer
+
+On web and desktop, selecting an image, video, or audio file opens a full-screen
+preview. Press Escape or close the preview to return to Files. Images fit the
+window; scroll to zoom and drag to pan.
+
+Use **Open in default app** to open any file, including Markdown and formats T3
+Code cannot preview, with its associated OS application. **Open with** in the file
+tree offers detected editors. These actions open the file on the environment's
+machine; the default-app toolbar action is available for local connections.
+
 ## HTML and PDF files in the file viewer
 
 On web and desktop, HTML and PDF files open as rendered pages. Switch an HTML
