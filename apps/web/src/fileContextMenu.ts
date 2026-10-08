@@ -39,6 +39,7 @@ export interface FileContextMenuTarget {
   readonly filePath: string;
   readonly workspaceRoot: string | undefined;
   readonly repositoryRoot?: string | undefined;
+  readonly isDirectory?: boolean;
 }
 
 /** Absolute path on the environment host, or null when it cannot be resolved. */
@@ -79,12 +80,16 @@ export interface FileContextMenuCapabilities {
 export function buildFileContextMenuItems(input: {
   readonly hasAbsolutePath: boolean;
   readonly capabilities: FileContextMenuCapabilities;
+  readonly isDirectory?: boolean;
 }): readonly ContextMenuItem<FileContextMenuAction>[] {
   // Without a resolvable absolute path nothing here can act on the file.
   if (!input.hasAbsolutePath) return [];
   const items: ContextMenuItem<FileContextMenuAction>[] = [];
   if (input.capabilities.canOpenDefault) {
-    items.push({ id: "open", label: "Open", icon: "pencil" });
+    items.push({
+      id: "open",
+      label: input.isDirectory ? "Open" : "Open in default app",
+    });
   }
   if (input.capabilities.revealLabel !== undefined) {
     items.push({
@@ -173,6 +178,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       const items = buildFileContextMenuItems({
         hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
         capabilities,
+        isDirectory: target.isDirectory === true,
       });
       if (items.length === 0 || api === undefined) return;
       const clicked = await api.contextMenu.show(items, position);
@@ -185,6 +191,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
         buildFileContextMenuItems({
           hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
           capabilities,
+          isDirectory: target.isDirectory === true,
         }),
       capabilities,
       activate,

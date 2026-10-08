@@ -10,12 +10,6 @@ const BASE_TARGET = {
   workspaceRoot: "/workspace/project",
 };
 
-const EMPTY_CAPABILITIES = {
-  revealLabel: undefined,
-  canOpenDefault: false,
-  editorIds: [],
-};
-
 describe("resolveFileContextMenuAbsolutePath", () => {
   it("joins workspace-relative diff paths onto the workspace root", () => {
     expect(resolveFileContextMenuAbsolutePath(BASE_TARGET)).toBe("/workspace/project/src/index.ts");
@@ -66,7 +60,7 @@ describe("buildFileContextMenuItems", () => {
     });
 
     expect(items.map((item) => item.id)).toEqual(["open", "reveal-in-folder", "open-with"]);
-    expect(items[0]).toMatchObject({ label: "Open" });
+    expect(items[0]).toMatchObject({ label: "Open in default app" });
     expect(items[1]).toMatchObject({ label: "Reveal in Finder" });
     const openWith = items[2];
     NodeAssert.ok(openWith);
@@ -85,6 +79,15 @@ describe("buildFileContextMenuItems", () => {
 
     expect(items.map((item) => item.id)).toEqual(["reveal-in-folder"]);
     expect(items[0]).toMatchObject({ label: "Reveal in File Explorer" });
+  });
+
+  it("keeps the folder action distinct from opening a file in its default app", () => {
+    const items = buildFileContextMenuItems({
+      hasAbsolutePath: true,
+      isDirectory: true,
+      capabilities: { revealLabel: undefined, canOpenDefault: true, editorIds: [] },
+    });
+    expect(items).toMatchObject([{ id: "open", label: "Open" }]);
   });
 
   it("offers nothing when the path cannot be resolved", () => {

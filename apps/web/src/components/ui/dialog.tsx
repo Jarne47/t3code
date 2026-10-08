@@ -66,25 +66,32 @@ function DialogPopup({
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
-  variant?: "default" | "media";
+  variant?: "default" | "media" | "media-fullscreen";
 }) {
+  const media = variant === "media" || variant === "media-fullscreen";
+  const fullscreen = variant === "media-fullscreen";
   return (
     <DialogPortal>
       {/* Media opens from inside other overlays (a composer chip, a popover), so it sits above them. */}
-      <DialogBackdrop className={variant === "media" ? "z-[60]" : undefined} variant={variant} />
+      <DialogBackdrop
+        className={media ? "z-[60]" : undefined}
+        variant={media ? "media" : "default"}
+      />
       <DialogViewport
         className={cn(
           bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
-          variant === "media" &&
-            "z-[60] grid-rows-1 place-items-center px-4 py-6 [-webkit-app-region:no-drag]",
+          media && "z-[60] grid-rows-1 place-items-center px-4 py-6 [-webkit-app-region:no-drag]",
+          fullscreen && "p-0",
         )}
       >
         <DialogPrimitive.Popup
           className={cn(
-            variant === "media" ? DIALOG_MEDIA_POPUP_CLASS : DIALOG_POPUP_CLASS,
+            media ? DIALOG_MEDIA_POPUP_CLASS : DIALOG_POPUP_CLASS,
             "row-start-2 text-popover-foreground",
             variant === "default" && "max-h-full max-w-lg",
             bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
+            fullscreen &&
+              "row-start-1 h-dvh max-h-dvh w-screen max-w-none justify-center overflow-hidden border-0 bg-black p-4",
             className,
           )}
           data-slot="dialog-popup"
@@ -95,7 +102,7 @@ function DialogPopup({
             <DialogPrimitive.Close
               aria-label="Close"
               className="absolute end-2 top-2"
-              render={<Button size="icon" variant="ghost" />}
+              render={<Button size="icon" variant={fullscreen ? "media-close" : "ghost"} />}
             >
               <XIcon />
             </DialogPrimitive.Close>

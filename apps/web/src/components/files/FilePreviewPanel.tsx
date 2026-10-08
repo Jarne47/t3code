@@ -20,7 +20,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
-import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
+import { FolderTree, Globe2, Maximize2, SquareArrowOutUpRight, WrapTextIcon } from "lucide-react";
 import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
+import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -51,6 +52,8 @@ import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/envi
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
+import { shellEnvironment } from "~/state/shell";
+import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { AudioPreview } from "./AudioPreview";
@@ -126,6 +129,9 @@ function WorkspaceImagePreview(props: {
   readonly workspaceRoot: string;
   readonly alt: string;
   readonly workspaceMutationId: string | null;
+  readonly expanded: boolean;
+  readonly onExpand: () => void;
+  readonly onCollapse: () => void;
 }) {
   const resource = useMemo(
     () => ({
@@ -164,12 +170,27 @@ function WorkspaceImagePreview(props: {
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
       <MediaActions source={actionsSource}>
         <img
-          className="max-h-full max-w-full object-contain"
+          className="max-h-full max-w-full cursor-zoom-in object-contain"
           src={imageUrl}
           alt={props.alt}
+          role="button"
+          aria-label={`Preview ${props.alt} full screen`}
+          onClick={props.onExpand}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            props.onExpand();
+          }}
           onError={() => setFailedUrl(imageUrl)}
         />
       </MediaActions>
+      {props.expanded ? (
+        <ExpandedImageDialog
+          fullScreen
+          preview={{ images: [{ src: imageUrl, name: props.alt, actionsSource }], index: 0 }}
+          onClose={props.onCollapse}
+        />
+      ) : null}
     </div>
   ) : (
     <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
@@ -238,6 +259,9 @@ function WorkspaceVideoPreview(props: {
   readonly workspaceRoot: string;
   readonly name: string;
   readonly workspaceMutationId: string | null;
+  readonly expanded: boolean;
+  readonly onExpand: () => void;
+  readonly onCollapse: () => void;
 }) {
   const resource = useMemo(
     () => ({
@@ -262,6 +286,13 @@ function WorkspaceVideoPreview(props: {
       ? ""
       : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
   const latestUrl = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
+  const actionsSource: MediaActionSource = {
+    kind: "video",
+    name: props.name,
+    src: latestUrl,
+    reference: mediaFileReference(props.absolutePath, props.workspaceRoot),
+    asset: { environmentId: props.environmentId, resource },
+  };
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
@@ -271,16 +302,23 @@ function WorkspaceVideoPreview(props: {
         label={props.name}
         revision={props.workspaceMutationId}
         preload="metadata"
+        onOpen={props.onExpand}
         className="flex h-full min-h-0 w-full max-w-5xl items-center justify-center"
         onRetry={refreshAssetUrl}
-        actionsSource={{
-          kind: "video",
-          name: props.name,
-          src: latestUrl,
-          reference: mediaFileReference(props.absolutePath, props.workspaceRoot),
-          asset: { environmentId: props.environmentId, resource },
-        }}
+        actionsSource={actionsSource}
       />
+      {props.expanded ? (
+        <ExpandedImageDialog
+          fullScreen
+          preview={{
+            images: [
+              { src: latestUrl, name: props.name, type: "video", autoPlay: false, actionsSource },
+            ],
+            index: 0,
+          }}
+          onClose={props.onCollapse}
+        />
+      ) : null}
     </div>
   );
 }
@@ -291,6 +329,8 @@ function WorkspaceAudioPreview(props: {
   readonly absolutePath: string;
   readonly name: string;
   readonly workspaceMutationId: string | null;
+  readonly expanded: boolean;
+  readonly onCollapse: () => void;
 }) {
   const resource = useMemo(
     () => ({
@@ -327,7 +367,22 @@ function WorkspaceAudioPreview(props: {
     );
   }
   if (url === null) return <FileSurfaceLoading />;
-  return <AudioPreview src={url} name={props.name} onError={() => setFailedUrl(url)} />;
+  const audio = <AudioPreview src={url} name={props.name} onError={() => setFailedUrl(url)} />;
+  return props.expanded ? (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) props.onCollapse();
+      }}
+    >
+      <DialogPopup variant="media-fullscreen" bottomStickOnMobile={false}>
+        <DialogTitle className="sr-only">Audio preview: {props.name}</DialogTitle>
+        {audio}
+      </DialogPopup>
+    </Dialog>
+  ) : (
+    audio
+  );
 }
 
 function clampFileLine(contents: string, requestedLine: number): number {
@@ -942,6 +997,22 @@ export default function FilePreviewPanel({
   const isAudio = relativePath !== null && !isVideo && isWorkspaceAudioPreviewPath(relativePath);
   const isImage = relativePath !== null && !isVideo && isWorkspaceImagePreviewPath(relativePath);
   const isMedia = isImage || isVideo || isAudio;
+  // A new selection opens media across the window. Closing returns to the file
+  // surface; selecting the same file again (a new reveal request) opens it again.
+  const mediaSelectionKey = JSON.stringify([
+    environmentId,
+    threadRef.threadId,
+    relativePath,
+    revealRequestId,
+  ]);
+  const [collapsedMediaSelection, setCollapsedMediaSelection] = useState<string | null>(null);
+  const expandedMedia = collapsedMediaSelection !== mediaSelectionKey;
+  const expandMedia = () => setCollapsedMediaSelection(null);
+  const collapseMedia = () => setCollapsedMediaSelection(mediaSelectionKey);
+  const openInDefaultApp = useAtomCommand(
+    shellEnvironment.openInEditor,
+    "open file in default app",
+  );
   // PDFs have no text to show; HTML has, and can toggle between page and source.
   const isPdf = relativePath !== null && isPdfPreviewFile(relativePath);
   const isHtml = relativePath !== null && !isPdf && isBrowserPreviewFile(relativePath);
@@ -1131,6 +1202,27 @@ export default function FilePreviewPanel({
               compact
             />
           ) : null}
+          {absolutePath &&
+          !isDirectory &&
+          availableEditors.includes("file-manager") &&
+          remoteOpenState.mode === "local-exec" ? (
+            <FileSurfaceAction
+              label="Open in default app"
+              onPress={() => {
+                void openInDefaultApp({
+                  environmentId,
+                  input: { cwd: absolutePath, editor: "file-manager" },
+                });
+              }}
+            >
+              <SquareArrowOutUpRight className="size-3.5" />
+            </FileSurfaceAction>
+          ) : null}
+          {isMedia && !isDirectory ? (
+            <FileSurfaceAction label="Preview media full screen" onPress={expandMedia}>
+              <Maximize2 className="size-3.5" />
+            </FileSurfaceAction>
+          ) : null}
           {canToggleRendered && renderedMode ? (
             <FileSurfaceAction
               label={renderedToggleLabel(renderedMode, rendered)}
@@ -1207,6 +1299,9 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               name={relativePath}
               workspaceMutationId={workspaceMutationId}
+              expanded={expandedMedia}
+              onExpand={expandMedia}
+              onCollapse={collapseMedia}
             />
           ) : relativePath && isAudio && absolutePath ? (
             <WorkspaceAudioPreview
@@ -1216,6 +1311,8 @@ export default function FilePreviewPanel({
               absolutePath={absolutePath}
               name={relativePath}
               workspaceMutationId={workspaceMutationId}
+              expanded={expandedMedia}
+              onCollapse={collapseMedia}
             />
           ) : relativePath && isImage && absolutePath ? (
             <WorkspaceImagePreview
@@ -1226,6 +1323,9 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               alt={relativePath}
               workspaceMutationId={workspaceMutationId}
+              expanded={expandedMedia}
+              onExpand={expandMedia}
+              onCollapse={collapseMedia}
             />
           ) : relativePath && renderBrowserFile && absolutePath ? (
             <WorkspaceBrowserPreview
