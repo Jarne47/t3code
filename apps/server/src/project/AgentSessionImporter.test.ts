@@ -26,181 +26,256 @@ const providerInstanceId = ProviderInstanceId.make("codex");
 const providerSessionId = "native-codex-thread";
 const threadId = ThreadId.make(`import:${providerInstanceId}:${providerSessionId}`);
 
-it.effect("imports messages once and preserves the provider native resume binding", () => {
-  const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
-  const upserts: Array<unknown> = [];
-  const recorded: Array<unknown> = [];
-  let imported = false;
-  let busy = false;
-  let switched = false;
-  const messages: AgentSessionScanner.AgentSessionThreadMessage[] = [
-    { role: "user", text: "Fix it", createdAt: "2026-09-01T10:00:00.000Z" },
-    { role: "assistant", text: "Fixed", createdAt: "2026-09-01T10:01:00.000Z" },
-  ];
-  const scanner = AgentSessionScanner.AgentSessionScanner.of({
-    scan: Effect.die("unused"),
-    readCodexThread: () => Effect.die("unused"),
-    recentThreads: () =>
-      Stream.succeed({
-        _tag: "Importable",
-        source: {
-          provider: "codex",
-          providerInstanceId,
-          providerSessionId,
-          filePath: "/tmp/native-codex-thread.jsonl",
-          size: 100,
-          mtimeMs: 2,
-          device: 3,
-          inode: 4,
-          birthtimeMs: 1,
-        },
-        thread: {
-          source: "codex",
-          providerInstanceId,
-          providerSessionId,
-          title: "Imported thread",
-          model: "gpt-5.4",
-          createdAt: "2026-09-01T10:00:00.000Z",
-          updatedAt: "2026-09-01T10:01:00.000Z",
-          messages,
-        },
-      }),
-  });
-  const testLayer = AgentSessionImporter.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
-        Layer.mock(ProjectStore.ProjectStoreV2)({
-          get: () =>
-            Effect.succeed(
-              Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
-            ),
+it.effect.each([false, true])(
+  "imports messages once and preserves the native binding (discovery=%s)",
+  (discoverNew) => {
+    const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
+    const upserts: Array<unknown> = [];
+    const recorded: Array<unknown> = [];
+    let imported = false;
+    let busy = false;
+    let switched = false;
+    let hasLinkedHistory = discoverNew;
+    let locallyOwned = false;
+    let currentTitle = "Imported thread";
+    const messages: AgentSessionScanner.AgentSessionThreadMessage[] = [
+      { role: "user", text: "Fix it", createdAt: "2026-09-01T10:00:00.000Z" },
+      { role: "assistant", text: "Fixed", createdAt: "2026-09-01T10:01:00.000Z" },
+    ];
+    const scanner = AgentSessionScanner.AgentSessionScanner.of({
+      scan: Effect.die("unused"),
+      readCodexThread: () => Effect.die("unused"),
+      recentThreads: () =>
+        Stream.succeed({
+          _tag: "Importable",
+          source: {
+            provider: "codex",
+            providerInstanceId,
+            providerSessionId,
+            filePath: "/tmp/native-codex-thread.jsonl",
+            size: 100,
+            mtimeMs: 2,
+            device: 3,
+            inode: 4,
+            birthtimeMs: 1,
+          },
+          thread: {
+            source: "codex",
+            providerInstanceId,
+            providerSessionId,
+            title: "Imported thread",
+            model: "gpt-5.4",
+            createdAt: "2026-09-01T10:00:00.000Z",
+            updatedAt: "2026-09-01T10:01:00.000Z",
+            messages,
+          },
         }),
-        Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadRecords: () =>
-            imported
-              ? Effect.succeed({
-                  thread: writes.flat().find((event) => event.type === "thread.created")!.payload,
-                  messages: writes
-                    .flat()
-                    .filter((event) => event.type === "message.updated")
-                    .map((event) => event.payload),
-                  turnItems: writes
-                    .flat()
-                    .filter((event) => event.type === "turn-item.updated")
-                    .map((event) => event.payload),
-                  providerTurns: [],
-                  contextHandoffs: [],
-                  runs: busy ? [{ status: "running" }] : [],
-                  providerThreads: switched
-                    ? []
-                    : writes
-                        .flat()
-                        .filter((event) => event.type === "provider-thread.updated")
-                        .map((event) => event.payload),
-                } as never)
-              : Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId })),
-        }),
-        Layer.mock(EventSink.EventSinkV2)({
-          write: (input) =>
-            Effect.sync(() => {
-              writes.push(input.events);
-              imported = true;
-              return [];
-            }),
-        }),
-        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
-          list: () => Effect.succeed([]),
-          upsert: (input) => Effect.sync(() => void upserts.push(input)),
-          recordImportedTranscript: (input) => Effect.sync(() => void recorded.push(input)),
-        }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ detach: () => Effect.void }),
-        IdAllocator.layer,
-        ThreadCommandExecutor.layer,
+    });
+    const testLayer = AgentSessionImporter.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
+          Layer.mock(ProjectStore.ProjectStoreV2)({
+            get: () =>
+              Effect.succeed(
+                Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
+              ),
+          }),
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadRecords: () =>
+              imported
+                ? Effect.succeed({
+                    thread: {
+                      ...writes.flat().find((event) => event.type === "thread.created")!.payload,
+                      title: currentTitle,
+                    },
+                    messages: writes
+                      .flat()
+                      .filter((event) => event.type === "message.updated")
+                      .map((event) => event.payload),
+                    turnItems: writes
+                      .flat()
+                      .filter((event) => event.type === "turn-item.updated")
+                      .map((event) => event.payload),
+                    providerTurns: [],
+                    contextHandoffs: [],
+                    runs: busy ? [{ status: "running" }] : [],
+                    providerThreads: switched
+                      ? []
+                      : writes
+                          .flat()
+                          .filter((event) => event.type === "provider-thread.updated")
+                          .map((event) => event.payload),
+                  } as never)
+                : Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId })),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            write: (input) =>
+              Effect.sync(() => {
+                writes.push(input.events);
+                for (const event of input.events) {
+                  if (event.type === "thread.metadata-updated") currentTitle = event.payload.title;
+                }
+                imported = true;
+                return [];
+              }),
+          }),
+          Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+            list: () =>
+              Effect.succeed(
+                hasLinkedHistory
+                  ? [
+                      {
+                        threadId: ThreadId.make("native-t3-thread"),
+                        providerName: "codex",
+                        providerInstanceId,
+                        resumeCursor: locallyOwned ? { threadId: providerSessionId } : null,
+                        runtimePayload: {
+                          cwd: "/workspace/project",
+                          importedTranscripts: [
+                            {
+                              provider: "codex",
+                              providerInstanceId,
+                              providerSessionId: "previous-session",
+                              filePath: "/tmp/previous-session.jsonl",
+                              size: 10,
+                              mtimeMs: 2,
+                              device: 3,
+                              inode: 4,
+                              birthtimeMs: 1,
+                            },
+                          ],
+                        },
+                      } as never,
+                    ]
+                  : [],
+              ),
+            upsert: (input) => Effect.sync(() => void upserts.push(input)),
+            recordImportedTranscript: (input) => Effect.sync(() => void recorded.push(input)),
+          }),
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+            detach: () => Effect.void,
+          }),
+          IdAllocator.layer,
+          ThreadCommandExecutor.layer,
+        ),
       ),
-    ),
-  );
-
-  return Effect.gen(function* () {
-    const importer = yield* AgentSessionImporter.AgentSessionImporter;
-    expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
-      importedCount: 1,
-      skippedCount: 0,
-    });
-    expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
-      importedCount: 1,
-      skippedCount: 0,
-    });
-
-    expect(writes).toHaveLength(1);
-    expect(writes[0]?.map((event) => event.type)).toEqual([
-      "thread.created",
-      "message.updated",
-      "turn-item.updated",
-      "message.updated",
-      "turn-item.updated",
-      "provider-thread.updated",
-    ]);
-    const created = writes[0]?.find((event) => event.type === "thread.created");
-    const providerThread = writes[0]?.find((event) => event.type === "provider-thread.updated");
-    expect(created?.payload).toMatchObject({
-      id: threadId,
-      activeProviderThreadId: providerThread?.payload.id,
-      historyOrigin: "v1_import",
-    });
-    expect(providerThread?.payload).toMatchObject({
-      appThreadId: threadId,
-      nativeThreadRef: {
-        driver: "codex",
-        nativeId: providerSessionId,
-        strength: "strong",
-      },
-    });
-    expect(
-      writes[0]
-        ?.filter((event) => event.type === "message.updated")
-        .map((event) => event.payload.text),
-    ).toEqual(["Fix it", "Fixed"]);
-    expect(upserts).toEqual([
-      expect.objectContaining({
-        threadId,
-        providerInstanceId,
-        resumeCursor: { threadId: providerSessionId },
-      }),
-    ]);
-    expect(recorded).toHaveLength(2);
-    messages.push({
-      role: "assistant",
-      text: "External follow-up",
-      createdAt: "2026-09-01T10:02:00.000Z",
-    });
-    busy = true;
-    expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
-      importedCount: 0,
-      skippedCount: 1,
-    });
-    busy = false;
-    switched = true;
-    expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
-      importedCount: 0,
-      skippedCount: 1,
-    });
-    expect(recorded).toHaveLength(2);
-    switched = false;
-    expect(yield* importer.importRecentAgentThreads({ projectId }, { importedOnly: true })).toEqual(
-      { importedCount: 1, skippedCount: 0 },
     );
-    expect(writes).toHaveLength(2);
-    expect(writes[1]?.map((event) => event.type)).toEqual(["message.updated", "turn-item.updated"]);
-    expect(writes[1]?.find((event) => event.type === "message.updated")?.payload.text).toBe(
-      "External follow-up",
-    );
-    expect(writes[1]?.find((event) => event.type === "turn-item.updated")?.payload.ordinal).toBe(3);
-    yield* importer.importRecentAgentThreads({ projectId });
-    expect(writes).toHaveLength(2);
-    expect(upserts).toHaveLength(1);
-  }).pipe(Effect.provide(testLayer));
-});
+
+    return Effect.gen(function* () {
+      const importer = yield* AgentSessionImporter.AgentSessionImporter;
+      expect(yield* importer.importRecentAgentThreads({ projectId }, { discoverNew })).toEqual({
+        importedCount: 1,
+        skippedCount: 0,
+      });
+      expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
+        importedCount: 1,
+        skippedCount: 0,
+      });
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.map((event) => event.type)).toEqual([
+        "thread.created",
+        "message.updated",
+        "turn-item.updated",
+        "message.updated",
+        "turn-item.updated",
+        "provider-thread.updated",
+      ]);
+      const created = writes[0]?.find((event) => event.type === "thread.created");
+      const providerThread = writes[0]?.find((event) => event.type === "provider-thread.updated");
+      expect(created?.payload).toMatchObject({
+        id: threadId,
+        activeProviderThreadId: providerThread?.payload.id,
+        historyOrigin: "v1_import",
+        settledOverride: discoverNew ? null : "settled",
+        settledAt: discoverNew ? null : DateTime.makeUnsafe("2026-09-01T10:01:00.000Z"),
+      });
+      expect(providerThread?.payload).toMatchObject({
+        appThreadId: threadId,
+        nativeThreadRef: {
+          driver: "codex",
+          nativeId: providerSessionId,
+          strength: "strong",
+        },
+      });
+      expect(
+        writes[0]
+          ?.filter((event) => event.type === "message.updated")
+          .map((event) => event.payload.text),
+      ).toEqual(["Fix it", "Fixed"]);
+      expect(upserts).toEqual([
+        expect.objectContaining({
+          threadId,
+          providerInstanceId,
+          resumeCursor: { threadId: providerSessionId },
+        }),
+      ]);
+      expect(recorded).toHaveLength(2);
+      messages.push({
+        role: "assistant",
+        text: "External follow-up",
+        createdAt: "2026-09-01T10:02:00.000Z",
+      });
+      busy = true;
+      expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
+        importedCount: 0,
+        skippedCount: 1,
+      });
+      busy = false;
+      switched = true;
+      expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
+        importedCount: 0,
+        skippedCount: 1,
+      });
+      expect(recorded).toHaveLength(2);
+      switched = false;
+      expect(
+        yield* importer.importRecentAgentThreads({ projectId }, { importedOnly: true }),
+      ).toEqual({ importedCount: 1, skippedCount: 0 });
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.map((event) => event.type)).toEqual([
+        "message.updated",
+        "turn-item.updated",
+      ]);
+      expect(writes[1]?.find((event) => event.type === "message.updated")?.payload.text).toBe(
+        "External follow-up",
+      );
+      expect(writes[1]?.find((event) => event.type === "turn-item.updated")?.payload.ordinal).toBe(
+        3,
+      );
+      yield* importer.importRecentAgentThreads({ projectId });
+      expect(writes).toHaveLength(2);
+      expect(upserts).toHaveLength(1);
+      currentTitle = "<recommended_plugins>";
+      yield* importer.importRecentAgentThreads({ projectId });
+      expect(writes).toHaveLength(3);
+      expect(writes[2]?.map((event) => event.type)).toEqual(["thread.metadata-updated"]);
+      expect(currentTitle).toBe("Imported thread");
+      currentTitle = "My chosen title";
+      yield* importer.importRecentAgentThreads({ projectId });
+      expect(writes).toHaveLength(3);
+      expect(currentTitle).toBe("My chosen title");
+      hasLinkedHistory = true;
+      locallyOwned = true;
+      expect(
+        yield* importer.importRecentAgentThreads({ projectId }, { discoverNew: true }),
+      ).toEqual({
+        importedCount: 0,
+        skippedCount: 0,
+      });
+      expect(writes).toHaveLength(3);
+      hasLinkedHistory = false;
+      expect(
+        yield* importer.importRecentAgentThreads({ projectId }, { discoverNew: true }),
+      ).toEqual({
+        importedCount: 0,
+        skippedCount: 0,
+      });
+      expect(writes).toHaveLength(3);
+    }).pipe(Effect.provide(testLayer));
+  },
+);
 
 it.effect.each(["codex", "claudeAgent"] as const)(
   "refreshes migrated %s history without restoring a retired native binding",
@@ -288,6 +363,7 @@ it.effect.each(["codex", "claudeAgent"] as const)(
                 thread: {
                   id: importedId,
                   projectId,
+                  title: "Migrated thread",
                   historyOrigin: "v1_import",
                   activeProviderThreadId: null,
                   deletedAt: null,

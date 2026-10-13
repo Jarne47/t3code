@@ -1,13 +1,17 @@
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 
 import * as ProjectService from "./ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
+import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
-/** Refresh only already-linked transcripts; unchanged files cost a stat, not a transcript read. */
-const refreshImportedAgentThreads = Effect.fn("refreshImportedAgentThreads")(function* () {
+/** Refresh linked history, occasionally discovering new sessions in the same projects. */
+const refreshImportedAgentThreads = Effect.fn("refreshImportedAgentThreads")(function* (
+  discoverNew: boolean,
+) {
   const projectService = yield* ProjectService.ProjectService;
   const importer = yield* AgentSessionImporter.AgentSessionImporter;
   const projects = yield* projectService.listShells();
@@ -17,7 +21,7 @@ const refreshImportedAgentThreads = Effect.fn("refreshImportedAgentThreads")(fun
       importer
         .importRecentAgentThreads(
           { projectId: project.id, expectedWorkspaceRoot: project.workspaceRoot },
-          { importedOnly: true },
+          { importedOnly: !discoverNew, discoverNew },
         )
         .pipe(
           Effect.catch((cause) =>
@@ -32,12 +36,25 @@ const refreshImportedAgentThreads = Effect.fn("refreshImportedAgentThreads")(fun
 });
 
 export const layer = Layer.effectDiscard(
-  forkParked(
-    refreshImportedAgentThreads().pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Imported agent history refresh failed", { cause }),
+  Effect.gen(function* () {
+    const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+    let nextDiscoveryAt = 0;
+    yield* forkParked(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const discoverNew = now >= nextDiscoveryAt;
+        if (discoverNew) {
+          // Share one bounded home scan across projects, outside the frequent stat-only refresh.
+          yield* scanner.scan;
+          nextDiscoveryAt = now + 5 * 60_000;
+        }
+        yield* refreshImportedAgentThreads(discoverNew);
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Imported agent history refresh failed", { cause }),
+        ),
+        Effect.repeat(Schedule.spaced("30 seconds")),
       ),
-      Effect.repeat(Schedule.spaced("30 seconds")),
-    ),
-  ),
+    );
+  }),
 );

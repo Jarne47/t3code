@@ -128,6 +128,84 @@ const codexRolloutLine = (cwd: string) =>
 
 const encodeTranscriptRecord = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
+it.effect("imports saved Codex names and notices name changes without changing history", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const base = yield* fs.makeTempDirectoryScoped();
+    const home = path.join(base, "codex");
+    const workspace = path.join(base, "project");
+    yield* fs.makeDirectory(workspace);
+    const now = Date.parse("2026-08-24T12:00:00.000Z");
+    yield* TestClock.setTime(now);
+    const nativeId = "01a09f21-460b-7812-90d9-c05f6e4b7bd0";
+    yield* writeTranscript({
+      filePath: path.join(home, "sessions", "2026", "08", "24", `rollout-${nativeId}.jsonl`),
+      mtimeMs: now,
+      contents: [
+        { type: "session_meta", payload: { id: nativeId, cwd: workspace } },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "<recommended_plugins>\nSetup\n</recommended_plugins>" },
+            ],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "List the tickets" }],
+          },
+        },
+      ]
+        .map((record) => encodeTranscriptRecord(record))
+        .join("\n"),
+    });
+    const index = path.join(home, "session_index.jsonl");
+    yield* fs.writeFileString(
+      index,
+      [
+        "malformed entry",
+        encodeTranscriptRecord({ id: nativeId, thread_name: "Old name" }),
+        encodeTranscriptRecord({ id: nativeId, thread_name: "List open tickets and actions" }),
+      ].join("\n"),
+    );
+    yield* Effect.gen(function* () {
+      const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+      const get = () => scanner.recentThreads(workspace).pipe(Stream.runCollect);
+      const first = (yield* get())[0];
+      expect(first?._tag).toBe("Importable");
+      if (first?._tag !== "Importable") return;
+      expect(first.thread.title).toBe("List open tickets and actions");
+      yield* fs.writeFileString(
+        index,
+        encodeTranscriptRecord({ id: nativeId, thread_name: "Renamed ticket list" }),
+      );
+      const second = (yield* get())[0];
+      expect(second?._tag).toBe("Importable");
+      if (second?._tag !== "Importable") return;
+      expect(second.thread.title).toBe("Renamed ticket list");
+      expect(second.thread.messages).toEqual(first.thread.messages);
+      const direct = yield* scanner.readCodexThread(ProviderInstanceId.make("codex"), nativeId);
+      expect(direct._tag).toBe("Importable");
+      if (direct._tag === "Importable") expect(direct.thread.title).toBe("Renamed ticket list");
+      yield* fs.remove(index);
+      const fallback = (yield* get())[0];
+      if (fallback?._tag === "Importable")
+        expect(fallback.thread.title).toBe("<recommended_plugins>");
+    }).pipe(
+      Effect.provide(
+        layerScannerTest({ codexHomePath: home, claudeHomePath: path.join(base, "claude") }),
+      ),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 function makeRecordLimitTranscript(cwd: string, overflow: boolean): string {
   const records =
     [
@@ -3126,6 +3204,34 @@ describe("parseAgentSessionTranscript", () => {
       "Do something here so it looks like a real project.",
       "Created the project.",
     ]);
+  });
+
+  it.each([
+    ["<recommended_plugins>\nSetup\n</recommended_plugins>", "List open tickets"],
+    ["Earlier request", "Earlier request"],
+  ])("selects the first user prompt over setup in mixed Codex history (%s)", (firstText, title) => {
+    const thread = AgentSessionScanner.parseAgentSessionTranscript({
+      source: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      fallbackSessionId: "fallback",
+      lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
+      contents: [
+        { type: "session_meta", payload: { id: "codex-session" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: firstText }],
+          },
+        },
+        { type: "event_msg", payload: { type: "user_message", message: "List open tickets" } },
+      ]
+        .map((record) => encodeTranscriptRecord(record))
+        .join("\n"),
+    });
+    expect(thread?.title).toBe(title);
+    expect(thread?.messages).toHaveLength(2);
   });
 
   it("preserves context markup in response-only Codex messages", () => {

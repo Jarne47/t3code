@@ -94,6 +94,7 @@ const MAX_IMPORT_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_IMPORT_TRANSCRIPTS = 100;
 const MAX_IMPORT_RECORDS = 100_000;
+const MAX_CODEX_SESSION_INDEX_BYTES = 8 * 1024 * 1024;
 
 const TranscriptContentBlock = Schema.Struct({
   type: Schema.optional(Schema.String),
@@ -142,6 +143,9 @@ const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(
 const decodeTranscriptValue = Schema.decodeUnknownOption(TranscriptRecord);
 const selectTranscriptPath = createTranscriptJsonSelector(TranscriptRecord);
 const decodeCodexTurnMetadata = Schema.decodeUnknownOption(CodexTurnMetadata);
+const decodeCodexSessionName = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.String, thread_name: Schema.String })),
+);
 
 type DecodedTranscriptRecord = typeof TranscriptRecord.Type;
 
@@ -327,6 +331,7 @@ function parseAgentSessionRecords(
   let firstUserMessage:
     | (AgentSessionThreadMessage & { readonly codexResponseUser: boolean })
     | undefined;
+  let firstCodexUserEvent: string | undefined;
   // A Codex response item can include generated setup text beside the real
   // prompt. Suppress response-user records only when the shared turn ID and a
   // verbatim event copy prove which prompt the user submitted.
@@ -470,6 +475,7 @@ function parseAgentSessionRecords(
     if (record.type === "event_msg" && record.payload?.type === "user_message") {
       const text = record.payload.message ?? "";
       if (text.trim().length === 0) continue;
+      firstCodexUserEvent ??= text;
       // Codex can write the same prompt as both a response item and an event.
       // Remove only the matching response copy so mixed-format logs keep every
       // distinct user message.
@@ -531,7 +537,14 @@ function parseAgentSessionRecords(
   const retainedMessages = firstUserMessageRetained
     ? visibleMessages
     : [visibleFirstUserMessage, ...visibleMessages.slice(-(messageLimit - 1))];
-  const derivedTitle = visibleFirstUserMessage.text.trim().split("\n")[0]?.slice(0, 100).trim();
+  const titleText =
+    firstUserMessage.codexResponseUser &&
+    /^(<(recommended_plugins|environment_context|user_instructions)>|# AGENTS.md instructions for )/.test(
+      visibleFirstUserMessage.text.trim(),
+    )
+      ? (firstCodexUserEvent ?? visibleFirstUserMessage.text)
+      : visibleFirstUserMessage.text;
+  const derivedTitle = titleText.trim().split("\n")[0]?.slice(0, 100).trim();
 
   return {
     source: input.source,
@@ -706,6 +719,77 @@ export const make = Effect.gen(function* () {
 
   const statOption = (target: string) =>
     fileSystem.stat(target).pipe(Effect.asSome, Effect.orElseSucceed(Option.none));
+
+  const codexSessionNames = new Map<
+    string,
+    {
+      readonly identity: ReturnType<typeof transcriptIdentity>;
+      readonly names: Map<string, string>;
+    }
+  >();
+  // Codex keeps user-facing names separately from rollout prompts and injected setup.
+  const withCodexSessionName = Effect.fn("AgentSessionScanner.withCodexSessionName")(function* (
+    thread: AgentSessionThread,
+    filePath: string,
+  ) {
+    if (thread.source !== "codex") return thread;
+    let directory = path.dirname(filePath);
+    while (
+      path.basename(directory) !== "sessions" &&
+      path.basename(directory) !== "archived_sessions"
+    ) {
+      const parent = path.dirname(directory);
+      if (parent === directory) return thread;
+      directory = parent;
+    }
+    const indexPath = path.join(path.dirname(directory), "session_index.jsonl");
+    const stats = yield* statOption(indexPath);
+    if (Option.isNone(stats) || stats.value.type !== "File") return thread;
+    const identity = transcriptIdentity(indexPath, stats.value);
+    if (identity.size > MAX_CODEX_SESSION_INDEX_BYTES) return thread;
+    let cached = codexSessionNames.get(indexPath);
+    if (cached === undefined || !sameTranscriptIdentity(cached.identity, identity)) {
+      const contents = yield* Effect.scoped(
+        fileSystem.open(indexPath, { flag: "r" }).pipe(
+          Effect.flatMap((file) =>
+            Effect.gen(function* () {
+              if (
+                !sameTranscriptIdentity(identity, transcriptIdentity(indexPath, yield* file.stat))
+              )
+                return null;
+              const decoder = new TextDecoder();
+              let text = "";
+              let remaining = identity.size;
+              while (remaining > 0) {
+                const chunk = yield* file.readAlloc(Math.min(TRANSCRIPT_PREFIX_BYTES, remaining));
+                if (Option.isNone(chunk)) return null;
+                remaining -= chunk.value.byteLength;
+                text += decoder.decode(chunk.value, { stream: true });
+              }
+              return sameTranscriptIdentity(
+                identity,
+                transcriptIdentity(indexPath, yield* file.stat),
+              )
+                ? text + decoder.decode()
+                : null;
+            }),
+          ),
+        ),
+      ).pipe(Effect.orElseSucceed(() => null));
+      if (contents === null) return thread;
+      const names = new Map<string, string>();
+      for (const line of contents.split("\n")) {
+        const entry = decodeCodexSessionName(line);
+        if (Option.isSome(entry) && entry.value.thread_name.trim()) {
+          names.set(entry.value.id, entry.value.thread_name.trim());
+        }
+      }
+      cached = { identity, names };
+      codexSessionNames.set(indexPath, cached);
+    }
+    const title = cached.names.get(thread.providerSessionId);
+    return title === undefined ? thread : { ...thread, title };
+  });
 
   /** Match directory aliases without assuming the host volume is case-insensitive. */
   const directoryIdentity = Effect.fn("AgentSessionScanner.directoryIdentity")(function* (
@@ -1531,7 +1615,7 @@ export const make = Effect.gen(function* () {
           importedSessions.add(sessionKey);
           return Option.some<AgentSessionRecentThread>({
             _tag: "Importable",
-            thread: parsedThread,
+            thread: yield* withCodexSessionName(parsedThread, transcript.filePath),
             source,
           });
         }).pipe(importReadLock.withPermits(1)),
@@ -1644,7 +1728,7 @@ export const make = Effect.gen(function* () {
     if (thread === null || thread.providerSessionId !== nativeId) return skipped;
     return {
       _tag: "Importable",
-      thread,
+      thread: yield* withCodexSessionName(thread, filePath),
       source: {
         ...identity,
         provider: "codex",

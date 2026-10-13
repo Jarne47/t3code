@@ -219,6 +219,7 @@ const make = Effect.gen(function* () {
     input: AgentSessionImportInput,
     options?: {
       readonly importedOnly?: boolean;
+      readonly discoverNew?: boolean;
       readonly targetThreadId?: ThreadId;
       readonly resumeNativeSession?: boolean;
       readonly forceRead?: boolean;
@@ -269,6 +270,22 @@ const make = Effect.gen(function* () {
             `import:${source.providerInstanceId}:${source.providerSessionId}`,
       );
     });
+    // Background discovery follows projects already linked to external history.
+    if (options?.discoverNew && completedSources.length === 0) {
+      return { importedCount: 0, skippedCount: 0, reason: "unavailable" as const };
+    }
+    const locallyOwnedSessions = new Set(
+      runtimeRows.flatMap((runtime) => {
+        const cursor = decodeImportedResumeCursor(runtime.resumeCursor);
+        if (Option.isNone(cursor)) return [];
+        const nativeId =
+          runtime.providerName === "codex" ? cursor.value.threadId : cursor.value.resume;
+        const instanceId = runtime.providerInstanceId ?? runtime.providerName;
+        if (nativeId === undefined || runtime.threadId === `import:${instanceId}:${nativeId}`)
+          return [];
+        return [`${instanceId}\0${nativeId}`];
+      }),
+    );
     const outcomes =
       options?.outcome === undefined
         ? scanner.recentThreads(project.workspaceRoot, completedSources, options)
@@ -285,6 +302,12 @@ const make = Effect.gen(function* () {
           return;
         }
         const source = outcome.source;
+        // A T3-owned native rollout must not become a second imported conversation.
+        if (
+          options?.discoverNew &&
+          locallyOwnedSessions.has(`${source.providerInstanceId}\0${source.providerSessionId}`)
+        )
+          return;
         const threadId =
           options?.outcome === undefined
             ? ThreadId.make(`import:${source.providerInstanceId}:${source.providerSessionId}`)
@@ -486,6 +509,25 @@ const make = Effect.gen(function* () {
             const events = additions.flatMap((message, index) =>
               messageEvents({ threadId, index: nextIndex + index, message }),
             );
+            // Repair old setup-derived imports without overwriting a title chosen in T3.
+            if (
+              thread.title !== snapshot.thread.title &&
+              (/^<(recommended_plugins|environment_context|user_instructions)>$/.test(
+                snapshot.thread.title.trim(),
+              ) ||
+                snapshot.thread.title.startsWith("# AGENTS.md instructions for "))
+            ) {
+              const updatedAt = dateTime(thread.updatedAt);
+              events.push({
+                id: EventId.make(
+                  `${IMPORT_EVENT_PREFIX}:title:${threadId}:${source.mtimeMs}:${source.size}`,
+                ),
+                type: "thread.metadata-updated",
+                threadId,
+                occurredAt: updatedAt,
+                payload: { ...snapshot.thread, title: thread.title, updatedAt },
+              });
+            }
             if (
               options?.resumeNativeSession &&
               unresumedLegacyImport &&
@@ -618,8 +660,8 @@ const make = Effect.gen(function* () {
             createdAt,
             updatedAt,
             archivedAt: null,
-            settledOverride: "settled",
-            settledAt: updatedAt,
+            settledOverride: options?.discoverNew ? null : "settled",
+            settledAt: options?.discoverNew ? null : updatedAt,
             unsettledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
@@ -719,7 +761,7 @@ const make = Effect.gen(function* () {
 
   const importRecentAgentThreads = (
     input: AgentSessionImportInput,
-    options?: { readonly importedOnly?: boolean },
+    options?: { readonly importedOnly?: boolean; readonly discoverNew?: boolean },
   ) =>
     syncRecentAgentThreads(input, options).pipe(
       Effect.map(({ importedCount, skippedCount }): AgentSessionImportResult => ({

@@ -128,6 +128,7 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
       const threadId = ThreadId.make(appId);
       let activeRunId: string | null = null;
       const thread = {
+        title: "Earlier request",
         id: threadId,
         projectId,
         activeProviderThreadId: "provider-thread",
