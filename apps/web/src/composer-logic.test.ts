@@ -16,6 +16,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
+  composerAlternateShortcutLabel,
   composerSubmissionIntentForKey,
   composerStateAtPromptEnd,
   detectComposerTrigger,
@@ -103,9 +104,11 @@ describe("composerSubmissionIntentForKey", () => {
       ctrlKey: platform !== "MacIntel",
     };
     for (const sendShortcut of ["enter", "mod-enter", "mod-enter-multiline"] as const) {
+      // A send shortcut that requires Mod+Enter keeps that chord for a normal send.
+      const sendClaimsModEnter = sendShortcut !== "enter";
       const running = { ...input, platform, sendShortcut, prompt: "two\nlines", isRunning: true };
       const intent = composerSubmissionIntentForKey({ ...running, event: modEnter });
-      expect(intent).toBe("alternate");
+      expect(intent).toBe(sendClaimsModEnter ? "foreground" : "alternate");
       for (const activeTurnDefault of ["queue", "steer"] as const) {
         expect(
           resolveComposerDispatchMode({
@@ -113,7 +116,13 @@ describe("composerSubmissionIntentForKey", () => {
             alternateModifier: intent === "alternate",
             activeTurnDefault,
           }),
-        ).toBe(activeTurnDefault === "queue" ? "steer" : "queue");
+        ).toBe(
+          sendClaimsModEnter
+            ? activeTurnDefault
+            : activeTurnDefault === "queue"
+              ? "steer"
+              : "queue",
+        );
       }
       expect(
         composerSubmissionIntentForKey({
@@ -138,9 +147,10 @@ describe("composerSubmissionIntentForKey", () => {
           platform,
           sendShortcut,
           isDraftThread: true,
+          prompt: "two\nlines",
           event: modEnter,
         }),
-      ).toBe("background");
+      ).toBe(sendClaimsModEnter ? "foreground" : "background");
       expect(
         composerSubmissionIntentForKey({ ...running, event: { ...enter, shiftKey: true } }),
       ).toBeNull();
@@ -242,6 +252,46 @@ describe("composerSubmissionIntentForKey", () => {
     { event: { ...enter, repeat: true } },
   ])("does not submit with %j", (override) => {
     expect(composerSubmissionIntentForKey({ ...input, event: enter, ...override })).toBeNull();
+  });
+});
+
+describe("composerAlternateShortcutLabel", () => {
+  it.each([
+    ["enter", "one line", "⌘Enter"],
+    ["mod-enter-multiline", "one line", "⌘Enter"],
+    ["mod-enter-multiline", "two\nlines", null],
+    ["mod-enter", "one line", null],
+  ] as const)("labels the opposite action for %s with %j", (sendShortcut, prompt, expected) => {
+    expect(
+      composerAlternateShortcutLabel({
+        keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
+        platform: "MacIntel",
+        isDraftThread: false,
+        sendShortcut,
+        prompt,
+      }),
+    ).toBe(expected);
+  });
+
+  it("shows a custom binding the send shortcut does not claim", () => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "mod+alt+q",
+          command: "composer.sendAlternate",
+          when: "composerFocus && turnRunning",
+        },
+      ]),
+    );
+    expect(
+      composerAlternateShortcutLabel({
+        keybindings,
+        platform: "MacIntel",
+        isDraftThread: false,
+        sendShortcut: "mod-enter",
+        prompt: "one line",
+      }),
+    ).toBe("⌥⌘Q");
   });
 });
 

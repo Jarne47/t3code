@@ -1,5 +1,9 @@
 import type { ClientSettings } from "@t3tools/contracts/settings";
-import type { AssistantCitation, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type {
+  AssistantCitation,
+  KeybindingShortcut,
+  ResolvedKeybindingsConfig,
+} from "@t3tools/contracts";
 import {
   serializeAssistantCitation,
   withAssistantCitationComment,
@@ -9,7 +13,12 @@ import {
   type ComposerPromptSegment,
 } from "./composer-editor-mentions";
 
-import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
+import {
+  effectiveShortcutsForCommand,
+  formatShortcutLabel,
+  resolveShortcutCommand,
+  type ShortcutEventLike,
+} from "./keybindings";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
@@ -49,6 +58,18 @@ export function composerSubmissionIntentForKey(input: {
   const { event } = input;
   if (input.isMobileViewport || event.isComposing || event.keyCode === 229 || event.repeat)
     return null;
+  const requiresModifier = composerRequiresModifier(input.sendShortcut, input.prompt ?? "");
+  // A send shortcut that requires Mod+Enter owns that chord, so composer bindings on it
+  // (the opposite queue/steer action, starting in the background) cannot turn a send into
+  // something else.
+  if (
+    requiresModifier &&
+    event.key === "Enter" &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.shiftKey &&
+    !event.altKey
+  )
+    return "foreground";
   const command = resolveShortcutCommand(event, input.keybindings, {
     ...(input.platform === undefined ? {} : { platform: input.platform }),
     context: {
@@ -61,13 +82,37 @@ export function composerSubmissionIntentForKey(input: {
   if (command === "composer.sendBackground" && input.isDraftThread) return "background";
   if (command === "composer.sendAndNewThread" && !input.isDraftThread) return "background";
   if (command !== null || event.key !== "Enter" || event.shiftKey || event.altKey) return null;
-  if (
-    composerRequiresModifier(input.sendShortcut, input.prompt ?? "") &&
-    !event.metaKey &&
-    !event.ctrlKey
-  )
-    return null;
+  if (requiresModifier && !event.metaKey && !event.ctrlKey) return null;
   return "foreground";
+}
+
+function isPlainModEnter(shortcut: KeybindingShortcut) {
+  return (
+    shortcut.key === "enter" &&
+    (shortcut.modKey || shortcut.metaKey || shortcut.ctrlKey) &&
+    !shortcut.shiftKey &&
+    !shortcut.altKey
+  );
+}
+
+/**
+ * Label for the opposite queue/steer shortcut, for the send button's tooltip. Skips a
+ * binding the send shortcut claims (see `composerSubmissionIntentForKey`), so the hint
+ * never advertises a chord that would send normally instead.
+ */
+export function composerAlternateShortcutLabel(input: {
+  keybindings: ResolvedKeybindingsConfig;
+  platform?: string;
+  isDraftThread: boolean;
+  sendShortcut?: ClientSettings["sendShortcut"];
+  prompt?: string;
+}): string | null {
+  const requiresModifier = composerRequiresModifier(input.sendShortcut, input.prompt ?? "");
+  const shortcut = effectiveShortcutsForCommand(input.keybindings, "composer.sendAlternate", {
+    ...(input.platform === undefined ? {} : { platform: input.platform }),
+    context: { composerFocus: true, draftThreadRoute: input.isDraftThread, turnRunning: true },
+  }).find((candidate) => !(requiresModifier && isPlainModEnter(candidate)));
+  return shortcut ? formatShortcutLabel(shortcut, input.platform) : null;
 }
 
 const isInlineTokenSegment = (segment: ComposerPromptSegment): boolean => segment.type !== "text";

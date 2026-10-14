@@ -79,6 +79,7 @@ import {
   type ComposerTrigger,
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
+  composerAlternateShortcutLabel,
   composerSubmissionIntentForKey,
   composerStateAtPromptEnd,
   detectComposerTrigger,
@@ -7774,17 +7775,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isRunning={phase === "running"}
                     canInterrupt={canInterrupt}
                     followUpBehavior={settings.followUpBehavior}
-                    alternateShortcutLabel={shortcutLabelForCommand(
+                    alternateShortcutLabel={composerAlternateShortcutLabel({
                       keybindings,
-                      "composer.sendAlternate",
-                      {
-                        context: {
-                          composerFocus: true,
-                          draftThreadRoute: routeKind === "draft",
-                          turnRunning: true,
-                        },
-                      },
-                    )}
+                      isDraftThread: routeKind === "draft",
+                      sendShortcut: settings.sendShortcut,
+                      prompt,
+                    })}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }
