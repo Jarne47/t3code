@@ -203,7 +203,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   ...FAVORITE_MODEL_KEYBINDING_COMMANDS.map((command, index) => ({
     key: `ctrl+alt+${index + 1}`,
     command,
-    when: "!terminalFocus && !modelPickerOpen",
+    when: "!terminalFocus && !modelPickerOpen && !previewFocus",
   })),
   { key: "c", command: "usage.cost", when: "usagePageOpen" },
   { key: "t", command: "usage.tokens", when: "usagePageOpen" },

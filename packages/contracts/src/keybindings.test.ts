@@ -113,6 +113,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedModelPickerJump.command, "modelPicker.jump.1");
 
+    const parsedFavoriteModel = yield* decode(KeybindingRule, {
+      key: "ctrl+alt+1",
+      command: "composer.favoriteModel.1",
+    });
+    assert.strictEqual(parsedFavoriteModel.command, "composer.favoriteModel.1");
+
     const parsedThreadPrevious = yield* decode(KeybindingRule, {
       key: "mod+shift+[",
       command: "thread.previous",

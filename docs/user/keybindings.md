@@ -32,6 +32,7 @@ Use `mod+shift+l` to reuse the previous worktree directly.
 Use `Ctrl+Option+1` through `Ctrl+Option+9` on macOS, or `Ctrl+Alt+1` through
 `Ctrl+Alt+9` on Windows and Linux, to select a favorite model while typing.
 The numbers follow the selectable models in the picker's Favorites list.
+Customize these under **Composer: Favorite Model** in Settings → Keybindings.
 
 In the model picker, press Left in an empty search field or Shift+Tab to reach
 the provider list. Use Up/Down to move and Enter to choose. Right returns to

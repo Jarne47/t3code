@@ -12,6 +12,7 @@ import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { modelPickerJumpIndexFromCommand, resolveShortcutCommand } from "../../keybindings";
 import { isEditableFocused } from "../../lib/editableFocus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
+import { isPreviewFocused } from "../../lib/previewFocus";
 import { isModelPickerOpen } from "../../modelPickerVisibility";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
 import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
@@ -89,6 +90,7 @@ export function useFavoriteModelShortcut(input: {
         event.isComposing ||
         isCommandPaletteOpen() ||
         isModelPickerOpen() ||
+        isPreviewFocused() ||
         getTerminalFocusOwner() !== null
       )
         return;

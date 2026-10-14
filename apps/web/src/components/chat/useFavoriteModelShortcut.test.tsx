@@ -170,17 +170,19 @@ describe("favorite model shortcuts", () => {
     expect(container.querySelector("output")!.textContent).toBe("codex:second");
   });
 
-  it.each(["data-model-picker-content", "data-command-palette", "data-terminal-owner"])(
-    "leaves shortcuts to the surface owning %s",
-    async (attribute) => {
-      const surface = document.createElement("textarea");
-      surface.setAttribute(attribute, attribute === "data-terminal-owner" ? "drawer" : "true");
-      document.body.append(surface);
-      surface.focus();
-      expect((await jump(1)).defaultPrevented).toBe(false);
-      expect(container.querySelector("output")!.textContent).toBe("original");
-    },
-  );
+  it.each([
+    "data-model-picker-content",
+    "data-command-palette",
+    "data-terminal-owner",
+    "data-preview-panel-mode",
+  ])("leaves shortcuts to the surface owning %s", async (attribute) => {
+    const surface = document.createElement("textarea");
+    surface.setAttribute(attribute, attribute === "data-terminal-owner" ? "drawer" : "true");
+    document.body.append(surface);
+    surface.focus();
+    expect((await jump(1)).defaultPrevented).toBe(false);
+    expect(container.querySelector("output")!.textContent).toBe("original");
+  });
 
   it("ignores key repeats, composition, and disabled controls", async () => {
     expect((await jump(1, { repeat: true })).defaultPrevented).toBe(false);

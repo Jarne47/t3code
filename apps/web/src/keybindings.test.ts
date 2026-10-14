@@ -658,6 +658,12 @@ describe("model picker navigation helpers", () => {
         assert.isNull(
           resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
             platform,
+            context: { previewFocus: true },
+          }),
+        );
+        assert.isNull(
+          resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+            platform,
             context: { modelPickerOpen: false, terminalFocus: true },
           }),
         );
