@@ -44,13 +44,13 @@ import {
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
   parseOriginUrlFromGitConfig,
 } from "@t3tools/shared/git";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   createTranscriptJsonReader,
@@ -685,9 +685,9 @@ export const make = Effect.gen(function* () {
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
   // Windows filesystems are case-insensitive, so path prefix checks there
   // must case fold.
-  const foldWorktreeCase = (yield* HostProcessPlatform) === "win32";
-  const hostEnvironment = yield* HostProcessEnvironment;
-  const homeDir = NodeOS.homedir();
+  const foldWorktreeCase = (yield* HostProcess.Platform) === "win32";
+  const hostEnvironment = yield* HostProcess.Environment;
+  const homeDir = yield* HostProcess.HomeDirectory;
   // `/private/tmp` is what macOS reports for sessions started in `/tmp`.
   const excludedProjectRoots = new Set(
     [homeDir, NodeOS.tmpdir(), "/tmp", "/private/tmp"].map((directory) =>
@@ -1039,13 +1039,13 @@ export const make = Effect.gen(function* () {
   const resolveClaudeConfigDir = (homePath: string, environmentHome?: string): string => {
     const configured = homePath.trim();
     if (configured.length > 0) {
-      return path.resolve(expandHomePath(configured));
+      return path.resolve(expandHomePath(configured, homeDir));
     }
     const fromEnvironment = environmentHome?.trim() ?? "";
     if (fromEnvironment.length > 0) {
-      return path.resolve(expandHomePath(fromEnvironment));
+      return path.resolve(expandHomePath(fromEnvironment, homeDir));
     }
-    return path.join(NodeOS.homedir(), ".claude");
+    return path.join(homeDir, ".claude");
   };
 
   const discoverClaudeTranscripts = Effect.fn("AgentSessionScanner.discoverClaudeTranscripts")(
@@ -1229,16 +1229,15 @@ export const make = Effect.gen(function* () {
           instanceId: ProviderInstanceId.make(instanceId),
           config,
         }));
+      // The built-in default instance runs with default config when settings
+      // have no entry for it.
       if (!Object.hasOwn(settings.providerInstances, source)) {
-        const legacyInstance = {
+        const defaultInstance = {
           instanceId: ProviderInstanceId.make(source),
-          config: {
-            driver: ProviderDriverKind.make(source),
-            config: settings.providers[source],
-          },
+          config: { driver: ProviderDriverKind.make(source) },
         };
-        if (resolveProviderInstanceEnabled(legacyInstance.config)) {
-          instances.push(legacyInstance);
+        if (resolveProviderInstanceEnabled(defaultInstance.config)) {
+          instances.push(defaultInstance);
         }
       }
 
@@ -1345,7 +1344,7 @@ export const make = Effect.gen(function* () {
     const gitIdentities = new Map<string, AgentSessionProjectGit | null>();
 
     for (const candidate of raw) {
-      const expanded = expandHomePath(candidate.cwd.trim());
+      const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
       const resolved = path.resolve(expanded);
       if (isExcludedProjectPath(resolved)) continue;
@@ -1409,7 +1408,7 @@ export const make = Effect.gen(function* () {
       );
     const importedProjectsByRoot = new Map<string, (typeof importedProjects)[number]>();
     for (const project of importedProjects) {
-      const projectRoot = path.resolve(expandHomePath(project.workspaceRoot));
+      const projectRoot = path.resolve(expandHomePath(project.workspaceRoot, homeDir));
       importedProjectsByRoot.set(normalizeProjectPathForComparison(projectRoot), project);
       importedProjectsByRoot.set(yield* directoryIdentity(projectRoot), project);
     }
@@ -1458,7 +1457,7 @@ export const make = Effect.gen(function* () {
     importedOnly: boolean,
     forceRead: boolean,
   ) {
-    const root = path.resolve(expandHomePath(workspaceRoot));
+    const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
     if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
     const rootIdentity = yield* directoryIdentity(root);
@@ -1484,7 +1483,7 @@ export const make = Effect.gen(function* () {
       readonly transcript: RawCandidate["transcripts"][number] & { readonly mtimeMs: number };
     }> = [];
     for (const candidate of candidates) {
-      const expanded = expandHomePath(candidate.cwd.trim());
+      const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
       const resolved = path.resolve(expanded);
       if ((yield* directoryIdentity(resolved)) !== rootIdentity) continue;
@@ -1581,7 +1580,7 @@ export const make = Effect.gen(function* () {
           if (snapshotCwd === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
-          const expandedCwd = expandHomePath(snapshotCwd.trim());
+          const expandedCwd = expandHomePath(snapshotCwd.trim(), homeDir);
           if (
             !path.isAbsolute(expandedCwd) ||
             (yield* directoryIdentity(path.resolve(expandedCwd))) !== rootIdentity
@@ -1649,11 +1648,11 @@ export const make = Effect.gen(function* () {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
     );
-    const instance =
+    // The built-in default instance runs with default config when settings
+    // have no entry for it.
+    const instance: ProviderInstanceConfig | undefined =
       settings.providerInstances[providerInstanceId] ??
-      (providerInstanceId === "codex"
-        ? { driver: ProviderDriverKind.make("codex"), config: settings.providers.codex }
-        : undefined);
+      (providerInstanceId === "codex" ? { driver: ProviderDriverKind.make("codex") } : undefined);
     if (instance?.driver !== "codex" || !resolveProviderInstanceEnabled(instance)) return skipped;
     const config = decodeCodexSettings(instance.config ?? {});
     if (Option.isNone(config)) return skipped;

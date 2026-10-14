@@ -41,6 +41,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
+  pullRequestMatchesSearchQuery,
   searchSidebarThreads,
   shouldClearThreadSelectionOnMouseDown,
   shouldShowSidebarV2Duration,
@@ -1037,6 +1038,27 @@ describe("resolveSidebarThreadStatus", () => {
         resolveSidebarV2GroupStatus([{ ...woke, lastVisitedAt: "2026-03-09T11:01:00.000Z" }]),
       ).toBeNull();
     });
+  });
+});
+
+describe("pullRequestMatchesSearchQuery", () => {
+  const branchPullRequest = {
+    projectId: ProjectId.make("project"),
+    repository: "pingdotgg/t3code",
+    number: 123,
+    url: "https://github.com/pingdotgg/t3code/pull/123",
+  };
+
+  it("matches when every query token appears in the PR's terms", () => {
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "123")).toBe(true);
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "pingdotgg/t3code #123")).toBe(
+      true,
+    );
+  });
+
+  it("rejects queries with a token the PR does not carry, and blank queries", () => {
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "rebase 123")).toBe(false);
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "   ")).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   TurnItemId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   type OrchestrationV2DomainEvent,
@@ -15,9 +16,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { historyResponseItems, selectHistory } from "../orchestration-v2/ContextHandoffBudget.ts";
+import { historyResponseItems, selectHistory } from "@t3tools/provider-core/server/handoffBudget";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
@@ -172,7 +173,14 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
         Layer.provide(
           Layer.mergeAll(
             store,
-            ServerSettings.layerTest({ providers: { codex: { homePath: home } } }),
+            ServerSettings.layerTest({
+              providerInstances: {
+                [instanceId]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  config: { homePath: home },
+                },
+              },
+            }),
             ServerConfig.layerTest(base, { prefix: "t3-shared-sync-config-" }),
           ),
         ),
