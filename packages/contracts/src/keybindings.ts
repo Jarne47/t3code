@@ -34,6 +34,18 @@ export const MODEL_PICKER_JUMP_KEYBINDING_COMMANDS = [
 export type ModelPickerJumpKeybindingCommand =
   (typeof MODEL_PICKER_JUMP_KEYBINDING_COMMANDS)[number];
 
+export const FAVORITE_MODEL_KEYBINDING_COMMANDS = [
+  "composer.favoriteModel.1",
+  "composer.favoriteModel.2",
+  "composer.favoriteModel.3",
+  "composer.favoriteModel.4",
+  "composer.favoriteModel.5",
+  "composer.favoriteModel.6",
+  "composer.favoriteModel.7",
+  "composer.favoriteModel.8",
+  "composer.favoriteModel.9",
+] as const;
+
 const THREAD_KEYBINDING_COMMANDS = [
   "thread.stop",
   "thread.steerQueuedMessage",
@@ -88,6 +100,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "appearance.cycle",
   "themeEditor.toggle",
   "composer.stash",
+  ...FAVORITE_MODEL_KEYBINDING_COMMANDS,
   "composer.sendAlternate",
   "composer.sendBackground",
   "composer.sendAndNewThread",

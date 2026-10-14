@@ -638,6 +638,33 @@ describe("thread navigation helpers", () => {
 });
 
 describe("model picker navigation helpers", () => {
+  it.each(["MacIntel", "Win32", "Linux"])(
+    "matches Ctrl+Alt favorite-model shortcuts while typing on %s",
+    (platform) => {
+      for (let number = 1; number <= 9; number += 1) {
+        const input = event({
+          key: platform === "MacIntel" ? "™" : String(number),
+          code: `Digit${number}`,
+          ctrlKey: true,
+          altKey: true,
+        });
+        assert.strictEqual(
+          resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+            platform,
+            context: { modelPickerOpen: false, editableFocus: true },
+          }),
+          `composer.favoriteModel.${number}`,
+        );
+        assert.isNull(
+          resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+            platform,
+            context: { modelPickerOpen: false, terminalFocus: true },
+          }),
+        );
+      }
+    },
+  );
+
   it("maps jump commands to visible model indices", () => {
     assert.strictEqual(modelPickerJumpCommandForIndex(0), "modelPicker.jump.1");
     assert.strictEqual(modelPickerJumpCommandForIndex(2), "modelPicker.jump.3");
