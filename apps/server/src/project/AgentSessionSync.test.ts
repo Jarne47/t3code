@@ -22,6 +22,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
@@ -186,6 +187,9 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
         ),
       );
       const dependencies = Layer.mergeAll(
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getNativeThreadBindings: () => Effect.succeed([]),
+        }),
         scanner,
         store,
         IdAllocator.layer,

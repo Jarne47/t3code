@@ -39,6 +39,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 
@@ -213,6 +214,7 @@ const make = Effect.gen(function* () {
   const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
   const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const refreshedSources = new Map<ThreadId, ImportSource>();
   const pendingNativeReload = new Set<ThreadId>();
   const syncRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
@@ -286,6 +288,22 @@ const make = Effect.gen(function* () {
         return [`${instanceId}\0${nativeId}`];
       }),
     );
+    if (options?.targetThreadId === undefined) {
+      // V2 sessions persist their native identity in projections, not the
+      // legacy runtime table. Check all bindings, including unloaded sessions.
+      const bindings = yield* projections
+        .getNativeThreadBindings()
+        .pipe(
+          Effect.mapError(
+            (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
+          ),
+        );
+      for (const binding of bindings) {
+        if (binding.threadId !== `import:${binding.providerInstanceId}:${binding.nativeId}`) {
+          locallyOwnedSessions.add(`${binding.providerInstanceId}\0${binding.nativeId}`);
+        }
+      }
+    }
     const outcomes =
       options?.outcome === undefined
         ? scanner.recentThreads(project.workspaceRoot, completedSources, options)
@@ -304,7 +322,7 @@ const make = Effect.gen(function* () {
         const source = outcome.source;
         // A T3-owned native rollout must not become a second imported conversation.
         if (
-          options?.discoverNew &&
+          options?.targetThreadId === undefined &&
           locallyOwnedSessions.has(`${source.providerInstanceId}\0${source.providerSessionId}`)
         )
           return;

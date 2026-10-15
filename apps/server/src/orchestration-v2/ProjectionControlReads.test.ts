@@ -195,6 +195,30 @@ const storageCases = (["sqlite", "memory"] as const).map((storage) => ({
 }));
 
 it.effect.each(storageCases)(
+  "$storage: retains native thread ownership after a session is unloaded",
+  ({ storeLayer }) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const events = fixtureEvents(yield* DateTime.now);
+      const thread = events.find((event) => event.type === "thread.created")!;
+      const provider = events.find((event) => event.type === "provider-thread.updated")!;
+      yield* store.apply(thread);
+      yield* store.apply({
+        ...provider,
+        payload: { ...provider.payload, status: "not_loaded", providerSessionId: null },
+      });
+      assert.deepEqual(yield* store.getNativeThreadBindings(), [
+        { threadId, providerInstanceId, nativeId: "native-control-thread" },
+      ]);
+      yield* store.apply({
+        ...provider,
+        payload: { ...provider.payload, nativeThreadRef: null },
+      });
+      assert.deepEqual(yield* store.getNativeThreadBindings(), []);
+    }).pipe(Effect.provide(storeLayer)),
+);
+
+it.effect.each(storageCases)(
   "$storage: finds the active root turn without an attempt reverse link",
   ({ storeLayer }) =>
     Effect.gen(function* () {

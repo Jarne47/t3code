@@ -230,6 +230,7 @@ const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
   Layer.provideMerge(AgentSessionScanner.layer.pipe(Layer.provide(ProjectStore.layer))),
   Layer.provide(
     Layer.mergeAll(
+      ProjectionStore.layer,
       ThreadCommandExecutor.layer,
       ProjectStore.layer,
       layerOrchestratorProvided,

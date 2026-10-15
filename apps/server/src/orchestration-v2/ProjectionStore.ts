@@ -33,7 +33,6 @@ import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   ProjectId,
-  ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -64,6 +63,7 @@ import {
   ThreadId,
   TurnItemId,
   NodeId,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
 import {
   createOrchestrationV2TurnItemVisibility,
@@ -339,7 +339,19 @@ export interface ShellSnapshotOptions {
   readonly unsettledOnly?: boolean;
 }
 
+const NativeThreadBinding = Schema.Struct({
+  threadId: ThreadId,
+  providerInstanceId: ProviderInstanceId,
+  nativeId: Schema.String,
+});
+const decodeNativeThreadBindings = Schema.decodeUnknownEffect(Schema.Array(NativeThreadBinding));
+
 export interface ProjectionStoreV2Shape {
+  /** Durable native ownership, including unloaded sessions and retired bindings. */
+  readonly getNativeThreadBindings: () => Effect.Effect<
+    ReadonlyArray<typeof NativeThreadBinding.Type>,
+    ProjectionStoreV2Error
+  >;
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
@@ -5971,6 +5983,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     return {
+      getNativeThreadBindings: () =>
+        sql`
+          SELECT thread_id AS "threadId", provider_instance_id AS "providerInstanceId",
+            json_extract(payload_json, '$.nativeThreadRef.nativeId') AS "nativeId"
+          FROM orchestration_v2_projection_provider_threads
+          WHERE json_extract(payload_json, '$.nativeThreadRef.nativeId') IS NOT NULL
+        `.pipe(
+          Effect.flatMap(decodeNativeThreadBindings),
+          Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+        ),
       apply,
       getShellSnapshot,
       readShellSnapshot,
@@ -6019,6 +6041,24 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
     const sequence = yield* Ref.make(0);
 
     const service: ProjectionStoreV2Shape = {
+      getNativeThreadBindings: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()].flatMap((projection) =>
+              projection.providerThreads.flatMap((provider) =>
+                provider.nativeThreadRef?.nativeId == null
+                  ? []
+                  : [
+                      {
+                        threadId: projection.thread.id,
+                        providerInstanceId: provider.providerInstanceId,
+                        nativeId: provider.nativeThreadRef.nativeId,
+                      },
+                    ],
+              ),
+            ),
+          ),
+        ),
       apply: (event) =>
         Effect.gen(function* () {
           const result = yield* Ref.modify(replayState, (existing) => {

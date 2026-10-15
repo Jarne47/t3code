@@ -20,6 +20,7 @@ import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 
 const projectId = ProjectId.make("agent-session-import-project");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -37,6 +38,7 @@ it.effect.each([false, true])(
     let switched = false;
     let hasLinkedHistory = discoverNew;
     let locallyOwned = false;
+    let projectedOwner: ThreadId | null = null;
     let currentTitle = "Imported thread";
     const messages: AgentSessionScanner.AgentSessionThreadMessage[] = [
       { role: "user", text: "Fix it", createdAt: "2026-09-01T10:00:00.000Z" },
@@ -74,6 +76,14 @@ it.effect.each([false, true])(
     const testLayer = AgentSessionImporter.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getNativeThreadBindings: () =>
+              Effect.succeed(
+                projectedOwner === null
+                  ? []
+                  : [{ threadId: projectedOwner, providerInstanceId, nativeId: providerSessionId }],
+              ),
+          }),
           Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: () =>
@@ -265,7 +275,24 @@ it.effect.each([false, true])(
         skippedCount: 0,
       });
       expect(writes).toHaveLength(3);
+      // Normal V2 threads have no legacy runtime cursor. Their durable native
+      // binding must prevent both explicit imports and background duplicates.
+      locallyOwned = false;
+      projectedOwner = ThreadId.make("native-v2-thread");
+      expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
+        importedCount: 0,
+        skippedCount: 0,
+      });
+      expect(
+        yield* importer.importRecentAgentThreads({ projectId }, { discoverNew: true }),
+      ).toEqual({ importedCount: 0, skippedCount: 0 });
+      expect(writes).toHaveLength(3);
       hasLinkedHistory = false;
+      expect(yield* importer.importRecentAgentThreads({ projectId })).toEqual({
+        importedCount: 0,
+        skippedCount: 0,
+      });
+      expect(writes).toHaveLength(3);
       expect(
         yield* importer.importRecentAgentThreads({ projectId }, { discoverNew: true }),
       ).toEqual({
@@ -311,6 +338,9 @@ it.effect.each(["codex", "claudeAgent"] as const)(
     const testLayer = AgentSessionImporter.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getNativeThreadBindings: () => Effect.succeed([]),
+          }),
           Layer.mock(AgentSessionScanner.AgentSessionScanner)({
             recentThreads: () =>
               Stream.succeed({

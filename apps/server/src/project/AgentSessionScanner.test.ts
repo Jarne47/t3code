@@ -3240,6 +3240,55 @@ describe("parseAgentSessionTranscript", () => {
     expect(thread?.messages).toHaveLength(2);
   });
 
+  it.each([false, true])(
+    "excludes provenance-tagged Codex setup from history and titles (context only=%s)",
+    (contextOnly) => {
+      const instructions =
+        "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nProject rules\n</INSTRUCTIONS>";
+      const response = (text: string, kinds: ReadonlyArray<string>) => ({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+          internal_chat_message_metadata_passthrough: {
+            turn_id: "turn-1",
+            content_item_kinds: kinds,
+          },
+        },
+      });
+      const thread = AgentSessionScanner.parseAgentSessionTranscript({
+        source: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        fallbackSessionId: "fallback",
+        lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
+        contents: [
+          { type: "session_meta", payload: { id: "codex-session" } },
+          response(instructions, ["agents_md.instructions", "environments.environment_context"]),
+          ...(!contextOnly
+            ? [
+                response("Find the inventory email", ["user.text"]),
+                // Instructions can be refreshed between ordinary messages.
+                response(instructions, ["agents_md.instructions"]),
+                response("Explain this quoted example:\n" + instructions, ["user.text"]),
+              ]
+            : []),
+        ]
+          .map((record) => encodeTranscriptRecord(record))
+          .join("\n"),
+      });
+      if (contextOnly) {
+        expect(thread).toBeNull();
+      } else {
+        expect(thread?.title).toBe("Find the inventory email");
+        expect(thread?.messages.map((message) => message.text)).toEqual([
+          "Find the inventory email",
+          "Explain this quoted example:\n" + instructions,
+        ]);
+      }
+    },
+  );
+
   it("preserves context markup in response-only Codex messages", () => {
     const context = "<environment_context>\n<cwd>/tmp/project</cwd>\n</environment_context>";
     const thread = AgentSessionScanner.parseAgentSessionTranscript({

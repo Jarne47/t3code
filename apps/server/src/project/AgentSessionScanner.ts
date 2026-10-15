@@ -109,6 +109,7 @@ const TranscriptMessage = Schema.Struct({
 
 const CodexTurnMetadata = Schema.Struct({
   turn_id: Schema.optional(Schema.Union([Schema.String, Schema.Null])),
+  content_item_kinds: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const TranscriptRecord = Schema.Struct({
@@ -296,6 +297,24 @@ function codexTurnId(metadata: unknown): string | null {
     return null;
   }
   return decoded.value.turn_id;
+}
+
+// Codex writes host context with the user role, including in response-only
+// rollouts. Its provenance distinguishes that setup from a user's quoted rules.
+function isCodexContextMessage(metadata: unknown): boolean {
+  const decoded = decodeCodexTurnMetadata(metadata);
+  if (Option.isNone(decoded)) return false;
+  const kinds = decoded.value.content_item_kinds;
+  return (
+    kinds !== undefined &&
+    kinds.length > 0 &&
+    kinds.every(
+      (kind) =>
+        kind === "agents_md.instructions" ||
+        kind === "environments.environment_context" ||
+        kind === "plugins.recommendations",
+    )
+  );
 }
 
 /** Keep visible user and assistant text while ignoring tools, reasoning, and malformed records. */
@@ -509,6 +528,12 @@ function parseAgentSessionRecords(
     nativeTurnId =
       codexTurnId(record.payload.internal_chat_message_metadata_passthrough) ?? nativeTurnId;
     if (extractedText.length === 0) continue;
+    if (
+      record.payload.role === "user" &&
+      isCodexContextMessage(record.payload.internal_chat_message_metadata_passthrough)
+    ) {
+      continue;
+    }
     if (record.payload.role === "user" && canonicalCodexResponseUserIndices.has(recordIndex)) {
       continue;
     }
