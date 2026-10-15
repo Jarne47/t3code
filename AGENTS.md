@@ -1,4 +1,16 @@
-# T3 Code
+# T3 Code (Itamar) — personal fork
+
+## Fork identity and scope
+
+- This project is **t3-itamar**, Itamar's personal fork. All requested changes are for this fork.
+- The fork's GitHub repository is **`Jarne47/t3code`**, and `origin` points there. The local folder and repository name `t3code` do not mean this is the official upstream project.
+- Push changes, run builds, and publish releases only in `Jarne47/t3code`. Builds use the fork's `build-personal.yml` GitHub Actions workflow and publish to its GitHub Releases.
+- The `official` remote, **`pingdotgg/t3code`**, is a read-only upstream reference. Never push changes, open pull requests, or publish builds or releases there for this project's work.
+- Preserve the personal **T3 Code (Itamar)** app identity. Its live T3 home is **`~/.t3-itamar`**; the live-state protections below apply to that directory too.
+
+The guidance below is inherited from upstream and applies within this personal fork. References to T3 Code or upstream maintainers do not authorize work on the upstream repository.
+
+## T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
