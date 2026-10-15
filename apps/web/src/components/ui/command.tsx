@@ -132,7 +132,7 @@ function CommandListVirtualized({
 }: React.ComponentProps<typeof AutocompleteListVirtualized>) {
   return (
     <AutocompleteListVirtualized
-      className={cn("flex max-h-[inherit] flex-col", className)}
+      className={cn("flex h-auto min-h-0 max-h-[inherit] flex-auto flex-col", className)}
       data-slot="command-list"
       {...props}
     />
@@ -152,7 +152,7 @@ function CommandPanel({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "relative min-h-0 overflow-hidden rounded-t-xl not-has-[+[data-slot=command-footer]]:rounded-b-2xl bg-transparent **:data-[slot=scroll-area-scrollbar]:mt-2 [touch-action:pan-y]",
+        "relative flex min-h-0 flex-col overflow-hidden rounded-t-xl not-has-[+[data-slot=command-footer]]:rounded-b-2xl bg-transparent **:data-[slot=scroll-area-scrollbar]:mt-2 [touch-action:pan-y]",
         className,
       )}
       {...props}
