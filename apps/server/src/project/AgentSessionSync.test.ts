@@ -299,6 +299,14 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
           .pipe(Effect.flip);
         expect(missing.reason).toBe("unavailable");
         yield* persist();
+
+        // T3 stopped this turn, but its app-server exited before writing
+        // turn_aborted. The open rollout turn is T3's own, so replies continue.
+        records.push(...turn("t3-turn-5", 12, "Stopped in T3", false));
+        ownTurns.push({ nativeTurnRef: { driver: "codex", nativeId: "t3-turn-5" } });
+        yield* persist();
+        yield* importer.refreshThread(threadId, { forReply: true });
+        expect(messages()).toHaveLength(6);
       }).pipe(Effect.provide(AgentSessionImporter.layer.pipe(Layer.provide(dependencies))));
       yield* run;
       // A fresh service has no fingerprint cache: native IDs still prevent duplicates.

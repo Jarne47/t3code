@@ -348,11 +348,6 @@ const make = Effect.gen(function* () {
 
         const imported = yield* Effect.gen(function* () {
           const thread = outcome.thread;
-          const sourceBusy = thread.activeTurnId !== undefined;
-          if (sourceBusy && options?.allowActiveHistory !== true) {
-            reason = "busy";
-            return false;
-          }
           if (
             thread.source === "claudeAgent" &&
             !CLAUDE_SESSION_ID_PATTERN.test(thread.providerSessionId)
@@ -372,6 +367,21 @@ const make = Effect.gen(function* () {
               "contextHandoffs",
             ]),
           );
+          // When T3 stops a turn whose app-server exits before writing
+          // turn_aborted, the rollout keeps that turn open forever. T3's own run
+          // state, checked below, decides whether a turn it started is busy.
+          const ownsActiveTurn =
+            Option.isSome(existing) &&
+            existing.value.providerTurns.some(
+              (turn) =>
+                turn.nativeTurnRef?.driver === "codex" &&
+                turn.nativeTurnRef.nativeId === thread.activeTurnId,
+            );
+          const sourceBusy = thread.activeTurnId !== undefined && !ownsActiveTurn;
+          if (sourceBusy && options?.allowActiveHistory !== true) {
+            reason = "busy";
+            return false;
+          }
           if (Option.isSome(existing)) {
             if (existing.value.thread.projectId !== input.projectId) {
               return yield* new AgentSessionThreadProjectConflictError({
