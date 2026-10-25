@@ -8,6 +8,7 @@ import {
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
+import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
 import {
   connectionCatalogDisplayUrl,
@@ -71,8 +72,12 @@ export function createEnvironmentPresentationAtoms<E>(input: {
   ) => Atom.Atom<AsyncResult.AsyncResult<SupervisorConnectionState, E>>;
   readonly serverConfigValueAtom: (environmentId: EnvironmentId) => Atom.Atom<ServerConfig | null>;
 }) {
-  const presentationAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get) => {
+  const presentationAtom = Atom.family((environmentId: EnvironmentId) => {
+    let namedEntry: {
+      readonly source: ConnectionCatalogEntry;
+      readonly value: ConnectionCatalogEntry;
+    } | null = null;
+    return Atom.make((get) => {
       const entry = get(input.catalogValueAtom).entries.get(environmentId);
       if (entry === undefined) {
         return null;
@@ -86,16 +91,33 @@ export function createEnvironmentPresentationAtoms<E>(input: {
         entry.unsupportedReason === undefined
           ? presentEnvironmentConnection(state)
           : { phase: "unsupported", error: entry.unsupportedReason, traceId: null };
+      const serverConfig = withoutProviders(
+        get(input.serverConfigValueAtom(environmentId)),
+        previous?.serverConfig ?? null,
+      );
+      const label =
+        serverConfig?.settings?.environmentName?.trim() ||
+        serverConfig?.environment.systemLabel ||
+        serverConfig?.environment.label ||
+        entry.target.label;
+      if (
+        namedEntry === null ||
+        namedEntry.source !== entry ||
+        namedEntry.value.target.label !== label
+      ) {
+        namedEntry = {
+          source: entry,
+          value:
+            label === entry.target.label ? entry : { ...entry, target: { ...entry.target, label } },
+        };
+      }
       const next = {
-        entry,
+        entry: namedEntry.value,
         connection:
           previous !== null && sameConnection(previous.connection, connection)
             ? previous.connection
             : connection,
-        serverConfig: withoutProviders(
-          get(input.serverConfigValueAtom(environmentId)),
-          previous?.serverConfig ?? null,
-        ),
+        serverConfig,
       } satisfies EnvironmentPresentation;
       return previous !== null &&
         previous.entry === next.entry &&
@@ -103,8 +125,8 @@ export function createEnvironmentPresentationAtoms<E>(input: {
         previous.serverConfig === next.serverConfig
         ? previous
         : next;
-    }).pipe(Atom.withLabel(`environment-presentation:${environmentId}`)),
-  );
+    }).pipe(Atom.withLabel(`environment-presentation:${environmentId}`));
+  });
 
   let previous: ReadonlyMap<EnvironmentId, EnvironmentPresentation> = new Map();
   const presentationsAtom = Atom.make((get) => {
@@ -232,7 +254,7 @@ export function createEnvironmentSummaryAtoms(input: {
   const identitiesAtom = Atom.make((get) => {
     const next = [...get(input.catalogValueAtom).entries].map(([environmentId, entry]) => ({
       environmentId,
-      label: entry.target.label,
+      label: get(input.presentationAtom(environmentId))?.entry.target.label ?? entry.target.label,
     }));
     const previous = Option.getOrNull(
       get.self<ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly label: string }>>(),

@@ -20,6 +20,7 @@ import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
@@ -185,6 +186,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
@@ -254,6 +256,7 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
       threadStop: true,
+      environmentName: true,
       environmentIcon: true,
       projectCloneTracking: true,
       ignoredFileListing: true,
@@ -267,12 +270,27 @@ export const make = Effect.gen(function* () {
     },
   };
 
+  const readEnvironmentName = settings.getSettings.pipe(
+    Effect.map((current) => current.environmentName),
+    Effect.catchTags({
+      ServerSettingsError: (error) =>
+        Effect.logWarning("Could not read the custom environment name", { error }).pipe(
+          Effect.as(null),
+        ),
+    }),
+  );
+
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // Publishing opt-in and relay links change at runtime; read the capability per request.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
+    // Names and publishing settings can change without restarting the server.
+    getDescriptor: Effect.all({
+      agentActivityPublishing: readAgentActivityPublishingActive(secrets),
+      environmentName: readEnvironmentName,
+    }).pipe(
+      Effect.map(({ agentActivityPublishing, environmentName }) => ({
         ...descriptor,
+        label: environmentName?.trim() || label,
+        systemLabel: label,
         capabilities: { ...descriptor.capabilities, agentActivityPublishing },
       })),
     ),

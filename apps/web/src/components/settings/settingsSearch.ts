@@ -1006,14 +1006,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "This machine",
     to: "/settings/connections",
     searchTerms: [
-      "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
+      "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint rename custom machine name hostname",
     ],
   },
   {
     id: "remote-environments",
     title: "Environments",
     to: "/settings/connections",
-    searchTerms: ["add pair backend host code ssh config agent tunnel saved t3 connect"],
+    searchTerms: [
+      "add pair backend host code ssh config agent tunnel saved t3 connect rename custom machine name hostname",
+    ],
   },
   {
     id: "load-balancing",

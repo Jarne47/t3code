@@ -27,6 +27,7 @@ import { cn } from "../../lib/utils";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
+import { EnvironmentNameEditor } from "./EnvironmentNameEditor";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
 import {
   ConnectionDiagnosisPanel,
@@ -395,6 +396,12 @@ export function SavedBackendListRow({
           {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
+      <EnvironmentNameEditor
+        environmentId={environmentId}
+        label={environment.label}
+        serverConfig={environment.serverConfig}
+        connected={enabled && isConnected}
+      />
       <Menu>
         <MenuTrigger
           render={
