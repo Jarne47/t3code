@@ -43,7 +43,13 @@ interface ProjectGroup {
   }[];
 }
 
-function SortableProjectGroup({ group }: { group: ProjectGroup }) {
+function SortableProjectGroup({
+  group,
+  reorderable,
+}: {
+  group: ProjectGroup;
+  reorderable: boolean;
+}) {
   const expanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, [group.key]),
   );
@@ -73,7 +79,7 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: group.key });
+  } = useSortable({ id: group.key, disabled: !reorderable });
   return (
     <li
       ref={setNodeRef}
@@ -110,16 +116,18 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
           ) : null}
           <span className="tabular-nums">{group.children.length}</span>
         </button>
-        <button
-          type="button"
-          ref={setActivatorNodeRef}
-          {...attributes}
-          {...listeners}
-          aria-label={`Move project ${group.label}`}
-          className="touch-none cursor-grab px-2 py-2 hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring active:cursor-grabbing"
-        >
-          <GripVerticalIcon aria-hidden className="size-3.5 shrink-0" />
-        </button>
+        {reorderable && (
+          <button
+            type="button"
+            ref={setActivatorNodeRef}
+            {...attributes}
+            {...listeners}
+            aria-label={`Move project ${group.label}`}
+            className="touch-none cursor-grab px-2 py-2 hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring active:cursor-grabbing"
+          >
+            <GripVerticalIcon aria-hidden className="size-3.5 shrink-0" />
+          </button>
+        )}
       </div>
       <ul
         id={listId}
@@ -144,8 +152,17 @@ function SortableProjectGroup({ group }: { group: ProjectGroup }) {
   );
 }
 
-/** A separate sortable context moves whole projects; thread actions stay on their rows. */
-export function ActiveProjectGroups({ groups }: { groups: readonly ProjectGroup[] }) {
+/**
+ * A separate sortable context moves whole projects; thread actions stay on their rows.
+ * `reorderable` is false while projects follow their newest user message.
+ */
+export function ActiveProjectGroups({
+  groups,
+  reorderable = true,
+}: {
+  groups: readonly ProjectGroup[];
+  reorderable?: boolean;
+}) {
   const savedOrder = useClientSettings((settings) => settings.sidebarActiveProjectOrder);
   const updateSettings = useUpdateClientSettings();
   const keys = useMemo(() => groups.map((group) => group.key), [groups]);
@@ -174,7 +191,7 @@ export function ActiveProjectGroups({ groups }: { groups: readonly ProjectGroup[
         <SortableContext items={keys} strategy={verticalListSortingStrategy}>
           <ul role="presentation">
             {groups.map((group) => (
-              <SortableProjectGroup key={group.key} group={group} />
+              <SortableProjectGroup key={group.key} group={group} reorderable={reorderable} />
             ))}
           </ul>
         </SortableContext>

@@ -495,6 +495,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("manual" as const)),
   ),
   sidebarGroupActiveThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // With grouping and "Last user message" sorting, order projects by their newest user message
+  // instead of the saved drag order.
+  sidebarRecentProjectsFirst: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarActiveProjectOrder: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -1758,6 +1761,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarActiveSortOrder: Schema.optionalKey(SidebarActiveSortOrder),
   sidebarGroupActiveThreads: Schema.optionalKey(Schema.Boolean),
+  sidebarRecentProjectsFirst: Schema.optionalKey(Schema.Boolean),
   sidebarActiveProjectOrder: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),

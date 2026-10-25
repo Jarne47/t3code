@@ -619,6 +619,7 @@ describe("ClientSettings sidebar", () => {
   it("persists independent project grouping and custom group order", () => {
     expect(decodeClientSettings({}).sidebarGroupActiveThreads).toBe(false);
     expect(decodeClientSettings({}).sidebarActiveProjectOrder).toEqual([]);
+    expect(decodeClientSettings({}).sidebarRecentProjectsFirst).toBe(true);
     const patch = { sidebarGroupActiveThreads: true, sidebarActiveProjectOrder: ["beta", "alpha"] };
     expect(decodeClientSettingsPatch(patch)).toMatchObject(patch);
     expect(decodeClientSettings(patch)).toMatchObject(patch);

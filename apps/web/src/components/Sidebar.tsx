@@ -2377,6 +2377,10 @@ export default function Sidebar() {
   const groupActiveThreads =
     useClientSettings((s) => s.sidebarGroupActiveThreads) || activeSortOrder === "project";
   const activeProjectOrder = useClientSettings((s) => s.sidebarActiveProjectOrder);
+  // Projects jump to the top on a new user message; dragging groups is unavailable meanwhile.
+  const recentProjectsFirst =
+    useClientSettings((s) => s.sidebarRecentProjectsFirst) &&
+    (activeSortOrder === "updated_at" || activeSortOrder === "project");
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -2885,6 +2889,7 @@ export default function Sidebar() {
         : sortActiveSidebarThreads(active, activeSortOrder, activeProjectGroups, {
             groupByProject: groupActiveThreads && scopedProjectKeys === null,
             projectOrder: activeProjectOrder,
+            recentProjectsFirst,
           });
     return {
       pinnedThreads:
@@ -2927,6 +2932,7 @@ export default function Sidebar() {
     activeProjectGroups,
     groupActiveThreads,
     activeProjectOrder,
+    recentProjectsFirst,
     workingShelfEnabled,
   ]);
 
@@ -5469,10 +5475,12 @@ export default function Sidebar() {
                               items.push(
                                 <ActiveProjectGroups
                                   key="active-project-groups"
+                                  reorderable={!recentProjectsFirst}
                                   groups={groupActiveSidebarThreads(
                                     activeThreads,
                                     activeProjectGroups,
                                     activeProjectOrder,
+                                    recentProjectsFirst,
                                   ).map((group) => ({
                                     ...group,
                                     project: projectGroupByScopeKey.get(group.key) ?? null,

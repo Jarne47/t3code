@@ -26,6 +26,8 @@ export function SidebarSortMenu({ disabled }: { disabled: boolean }) {
   const grouped =
     useClientSettings((settings) => settings.sidebarGroupActiveThreads) || savedOrder === "project";
   const order = savedOrder === "project" ? "updated_at" : savedOrder;
+  const recentProjectsFirst = useClientSettings((settings) => settings.sidebarRecentProjectsFirst);
+  const projectsFollowMessages = grouped && order === "updated_at" && recentProjectsFirst;
   const updateSettings = useUpdateClientSettings();
   return (
     <div className="mt-1 flex items-center justify-end">
@@ -77,10 +79,22 @@ export function SidebarSortMenu({ disabled }: { disabled: boolean }) {
           >
             Group by project
           </MenuCheckboxItem>
+          {grouped && order === "updated_at" && (
+            <MenuCheckboxItem
+              checked={recentProjectsFirst}
+              onCheckedChange={(checked) => {
+                void updateSettings({ sidebarRecentProjectsFirst: checked });
+              }}
+            >
+              Recently messaged projects first
+            </MenuCheckboxItem>
+          )}
           <p className="max-w-56 px-2 py-1 text-xs text-muted-foreground">
-            {grouped
-              ? "Drag project headers to arrange groups. Pinned threads stay on top."
-              : "Choose Manual order to drag threads. Pinned threads always stay on top."}
+            {projectsFollowMessages
+              ? "A project moves to the top when you message it. Pinned threads stay on top."
+              : grouped
+                ? "Drag project headers to arrange groups. Pinned threads stay on top."
+                : "Choose Manual order to drag threads. Pinned threads always stay on top."}
           </p>
         </MenuPopup>
       </Menu>

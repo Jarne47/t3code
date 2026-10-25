@@ -139,6 +139,30 @@ describe("active project grouping", () => {
     ]);
   });
 
+  it("moves the project with the newest user message to the top instead of the saved order", () => {
+    const messaged = [
+      thread("alpha-old", { latestUserMessageAt: "2026-09-10T00:00:00Z" }),
+      thread("beta", { projectId: "b", latestUserMessageAt: "2026-09-20T00:00:00Z" }),
+      thread("alpha-new", {
+        projectId: "a-worktree",
+        latestUserMessageAt: "2026-09-25T00:00:00Z",
+      }),
+    ];
+    expect(
+      ids(
+        sortActiveSidebarThreads(messaged, "updated_at", groups, {
+          ...options,
+          recentProjectsFirst: true,
+        }),
+      ),
+    ).toEqual(["alpha-new", "alpha-old", "beta"]);
+    expect(ids(sortActiveSidebarThreads(messaged, "updated_at", groups, options))).toEqual([
+      "beta",
+      "alpha-new",
+      "alpha-old",
+    ]);
+  });
+
   it("puts newly appearing groups after the saved order without losing their threads", () => {
     expect(
       ids(

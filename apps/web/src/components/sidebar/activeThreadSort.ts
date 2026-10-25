@@ -26,24 +26,33 @@ export function activeThreadProjectGroup(
   return groups.get(key) ?? { key, label: "Unavailable project" };
 }
 
-/** Group already-sorted threads without changing their order within each project. */
+/**
+ * Group already-sorted threads without changing their order within each project. Groups follow
+ * the saved project order, or the newest user message in each group when `recentFirst` is set.
+ */
 export function groupActiveSidebarThreads<T extends ActiveThread>(
   threads: readonly T[],
   groups: ReadonlyMap<string, ActiveThreadProjectGroup>,
   projectOrder: readonly string[] = [],
+  recentFirst = false,
 ): (ActiveThreadProjectGroup & { threads: T[] })[] {
-  const buckets = new Map<string, ActiveThreadProjectGroup & { threads: T[] }>();
+  const buckets = new Map<string, ActiveThreadProjectGroup & { threads: T[]; latest: number }>();
   for (const thread of threads) {
     const group = activeThreadProjectGroup(thread, groups);
+    const latest = recentFirst ? getThreadSortTimestamp(thread, "updated_at") : 0;
     const bucket = buckets.get(group.key);
-    if (bucket) bucket.threads.push(thread);
-    else buckets.set(group.key, { ...group, threads: [thread] });
+    if (bucket) {
+      bucket.threads.push(thread);
+      bucket.latest = Math.max(bucket.latest, latest);
+    } else buckets.set(group.key, { ...group, threads: [thread], latest });
   }
   const ranks = new Map(projectOrder.map((key, index) => [key, index]));
   return [...buckets.values()].sort(
     (left, right) =>
-      (ranks.get(left.key) ?? projectOrder.length) -
-        (ranks.get(right.key) ?? projectOrder.length) ||
+      (recentFirst
+        ? right.latest - left.latest
+        : (ranks.get(left.key) ?? projectOrder.length) -
+          (ranks.get(right.key) ?? projectOrder.length)) ||
       left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: "base" }) ||
       left.key.localeCompare(right.key),
   );
@@ -74,7 +83,11 @@ export function sortActiveSidebarThreads<T extends ActiveThread>(
   threads: readonly T[],
   order: SidebarActiveSortOrder,
   groups: ReadonlyMap<string, ActiveThreadProjectGroup>,
-  options: { groupByProject?: boolean; projectOrder?: readonly string[] } = {},
+  options: {
+    groupByProject?: boolean;
+    projectOrder?: readonly string[];
+    recentProjectsFirst?: boolean;
+  } = {},
 ): T[] {
   const sorted =
     order === "manual"
@@ -87,8 +100,11 @@ export function sortActiveSidebarThreads<T extends ActiveThread>(
             left.id.localeCompare(right.id),
         );
   return options.groupByProject || order === "project"
-    ? groupActiveSidebarThreads(sorted, groups, options.projectOrder).flatMap(
-        (group) => group.threads,
-      )
+    ? groupActiveSidebarThreads(
+        sorted,
+        groups,
+        options.projectOrder,
+        options.recentProjectsFirst,
+      ).flatMap((group) => group.threads)
     : sorted;
 }
