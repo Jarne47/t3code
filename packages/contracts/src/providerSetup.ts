@@ -41,8 +41,6 @@ export const ProviderAuthMethod = Schema.Struct({
 });
 export type ProviderAuthMethod = typeof ProviderAuthMethod.Type;
 
-// These describe client interactions, not OAuth grant types. The provider
-// adapter remains responsible for credentials, callbacks, and refresh.
 export const ProviderAuthInteraction = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("browser"),
@@ -132,8 +130,7 @@ export const ProviderAuthState = Schema.Struct({
   authorizationUrl: Schema.NullOr(Schema.String),
   expiresAt: Schema.NullOr(IsoDateTime),
   message: Schema.NullOr(Schema.String),
-  // Newer servers may add method types, interactions, or owners; older
-  // clients drop what they cannot decode instead of rejecting the state.
+  // Drop unknown auth methods rather than rejecting the entire state.
   methods: Schema.optionalKey(
     ForwardCompatibleArray(ProviderAuthMethod).check(Schema.isMaxLength(32)),
   ),
@@ -201,7 +198,6 @@ export class ProviderSetupError extends Schema.TaggedError<ProviderSetupError>()
   }
 }
 
-// A selected registration is reused on the primary without copying refresh ownership.
 export const ChatGptReconnectProfile = Schema.Struct({
   clientId: Schema.String.check(Schema.isPattern(/^oaiapp_[\w-]+$/u)),
   subject: Schema.optionalKey(Schema.String),

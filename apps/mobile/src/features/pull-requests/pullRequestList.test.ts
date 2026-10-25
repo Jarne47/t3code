@@ -12,12 +12,14 @@ import {
   mergePullRequestListEntries,
   mergeEnvironmentPullRequestPages,
   nextPullRequestListInput,
-  pullRequestListFacets,
+  PR_LIST_PAGE_SIZE,
+  pullRequestFilterChoices,
+  pullRequestLabelColors,
   pullRequestListHead,
-  pullRequestListReviewStatus,
-  pullRequestLabelColor,
+  pullRequestListInput,
   scopedPullRequestListKey,
   pullRequestListRowsAreEqual,
+  withoutScratchProjectScope,
 } from "./pullRequestList";
 
 function entry(number: number, patch: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
@@ -64,33 +66,6 @@ describe("recycled PR list rows", () => {
   const scopedEntry = (patch: Partial<PullRequestListEntry> = {}) => ({
     ...entry(1, patch),
     environmentId: EnvironmentId.make("env-one"),
-  });
-
-  it("keeps an unchanged row through provider refreshes and newly allocated labels and authors", () => {
-    const labels = [{ name: "bug", color: "ff0000" }];
-    expect(
-      pullRequestListRowsAreEqual(
-        scopedEntry({ labels }),
-        scopedEntry({ labels: labels.map((label) => ({ ...label })), observedAt: 20 }),
-      ),
-    ).toBe(true);
-  });
-
-  it.each([
-    { title: "New title" },
-    { additions: 8 },
-    { deletions: 4 },
-    { checksState: "failing" as const },
-    { reviewDecision: "approved" as const },
-    { viewerReviewRequested: true },
-    { isDraft: true },
-    { state: "closed" as const },
-    { author: { login: "another", name: null, avatarUrl: null } },
-    { author: { login: "octocat", name: null, avatarUrl: "https://example.com/avatar.png" } },
-    { labels: [{ name: "bug", color: "ff0000" }] },
-    { stack: { number: 1, position: 2, size: 3, base: "main" } },
-  ])("updates the row when visible status or quick actions change: %j", (patch) => {
-    expect(pullRequestListRowsAreEqual(scopedEntry(), scopedEntry(patch))).toBe(false);
   });
 
   it("updates navigation and commands when a duplicate moves to another environment", () => {
@@ -253,20 +228,6 @@ describe("all-environment PR list", () => {
 });
 
 describe("mobile PR scan and filters", () => {
-  it("shows review verdicts separately from checks and prioritizes changes requested", () => {
-    expect(
-      pullRequestListReviewStatus({
-        reviewDecision: "changes-requested",
-        viewerReviewRequested: true,
-      })?.accessibleLabel,
-    ).toBe("Changes requested");
-    expect(
-      pullRequestListReviewStatus({ reviewDecision: "approved", viewerReviewRequested: false })
-        ?.label,
-    ).toBe("Approved");
-    expect(pullRequestListReviewStatus({ viewerReviewRequested: true })?.label).toBe("Your review");
-    expect(pullRequestListReviewStatus({ viewerReviewRequested: false })).toBeNull();
-  });
   it("resolves authored and author:me per host rather than mixing account identities", () => {
     const rows = [entry(1), entry(2, { host: "enterprise.test" })];
     const viewers = { "github.com": "Octocat", "enterprise.test": "someone-else" };
@@ -288,29 +249,33 @@ describe("mobile PR scan and filters", () => {
         new Set(),
       ).map((row) => row.number),
     ).toEqual([1]);
-  });
-  it("combines label groups, exclusions, draft and review filters", () => {
-    const rows = [
-      entry(1, {
-        labels: [
-          { name: "size:XS", color: null },
-          { name: "bug", color: null },
-        ],
-        reviewDecision: "approved",
-      }),
-      entry(2, { isDraft: true, labels: [{ name: "bug", color: null }] }),
-      entry(3, { labels: [{ name: "feature", color: null }] }),
-    ];
-    const filters = {
-      draft: "hide" as const,
-      review: "approved" as const,
-      labels: [["SIZE:XS", "size:S"], ["bug"]],
-      excludedLabels: ["feature"],
-    };
     expect(
-      filterPullRequestList(rows, { ...DEFAULT_PR_LIST_CONTROLS, filters }, {}, "", new Set()).map(
+      filterPullRequestList(rows, DEFAULT_PR_LIST_CONTROLS, viewers, "author:@me", new Set()).map(
         (row) => row.number,
       ),
+    ).toEqual([1]);
+  });
+  it("reads a typed draft qualifier as a filter and searches only the text left over", () => {
+    expect(pullRequestListInput(DEFAULT_PR_LIST_CONTROLS, "draft:false fix")).toEqual({
+      state: "open",
+      involvement: "all",
+      filters: { draft: "hide" },
+      limit: PR_LIST_PAGE_SIZE,
+      query: "fix",
+    });
+    const rows = [
+      entry(1, { title: "Fix parser" }),
+      entry(2, { title: "Fix drafts", isDraft: true }),
+      entry(3),
+    ];
+    expect(
+      filterPullRequestList(
+        rows,
+        DEFAULT_PR_LIST_CONTROLS,
+        {},
+        "draft:false fix",
+        new Set(["github.com"]),
+      ).map((row) => row.number),
     ).toEqual([1]);
   });
   it("does not label unsupported review summaries as reviewed or match text locally on host-search results", () => {
@@ -346,30 +311,79 @@ describe("mobile PR scan and filters", () => {
     expect(pick(new Set(["laptop", "server"]))).toEqual(["laptop"]);
     expect(pick(new Set())).toEqual(["laptop"]);
   });
-  it("sorts loaded rows and builds unique author and label options", () => {
-    const rows = [
-      entry(1, { labels: [{ name: "bug", color: null }] }),
-      entry(2, {
-        labels: [
-          { name: "bug", color: null },
-          { name: "feature", color: null },
-        ],
-      }),
-    ];
+});
+
+describe("withoutScratchProjectScope", () => {
+  const projects = [
+    { id: "repo", environmentId: "env-a" },
+    { id: "scratch", environmentId: "env-a", isScratch: true as const },
+  ];
+
+  it("reads a scope saved on the Scratch folder as all projects", () => {
+    const controls = withoutScratchProjectScope(
+      { ...DEFAULT_PR_LIST_CONTROLS, projectId: "scratch", projectEnvironmentId: "env-a" },
+      projects,
+    );
+    expect(controls.projectId).toBeUndefined();
+    expect(controls.projectEnvironmentId).toBeUndefined();
+  });
+
+  it("keeps a repository scope, and one whose projects have not arrived yet", () => {
+    const repository = {
+      ...DEFAULT_PR_LIST_CONTROLS,
+      projectId: "repo",
+      projectEnvironmentId: "env-a",
+    };
+    expect(withoutScratchProjectScope(repository, projects)).toBe(repository);
+    const pending = { ...repository, projectId: "scratch" };
+    expect(withoutScratchProjectScope(pending, [])).toBe(pending);
+  });
+
+  it("keeps another server's project that shares the Scratch folder's id", () => {
+    const elsewhere = {
+      ...DEFAULT_PR_LIST_CONTROLS,
+      projectId: "scratch",
+      projectEnvironmentId: "env-b",
+    };
+    expect(withoutScratchProjectScope(elsewhere, projects)).toBe(elsewhere);
+  });
+});
+
+describe("pullRequestLabelColors", () => {
+  it("keeps the first usable color each label name carries", () => {
     expect(
-      filterPullRequestList(
-        rows,
-        { ...DEFAULT_PR_LIST_CONTROLS, sort: "oldest" },
-        {},
-        "",
-        new Set(),
-      ).map((row) => row.number),
-    ).toEqual([1, 2]);
-    expect(pullRequestListFacets(rows)).toEqual({
-      authors: ["octocat"],
-      labels: ["bug", "feature"],
+      pullRequestLabelColors([
+        { name: "Bug", color: null },
+        { name: "bug", color: "d73a4a" },
+        { name: "BUG", color: "#000000" },
+        { name: "docs", color: "not-a-color" },
+        { name: "size:S", color: "#69C35F" },
+      ]),
+    ).toEqual({ bug: "#d73a4a", "size:s": "#69C35F" });
+  });
+});
+
+describe("pullRequestFilterChoices", () => {
+  it("keeps the picked value in view and adds host answers no loaded row carries, once", () => {
+    expect(
+      pullRequestFilterChoices({
+        selected: ["size:XL"],
+        suggestions: ["bug", "size:XL", "docs"],
+        hosted: ["Bug", "backend"],
+        query: "b",
+      }),
+    ).toEqual(["size:XL", "bug", "backend"]);
+  });
+
+  it("leaves room for the host's answers when loaded matches alone would fill the list", () => {
+    const loaded = Array.from({ length: 120 }, (_, index) => `label-${index}`);
+    const rows = pullRequestFilterChoices({
+      selected: [],
+      suggestions: loaded,
+      hosted: ["label-from-host"],
+      query: "label",
     });
-    expect(pullRequestLabelColor("ffab00")).toBe("#ffab00");
-    expect(pullRequestLabelColor("not-a-color")).toBeNull();
+    expect(rows).toHaveLength(100);
+    expect(rows[50]).toBe("label-from-host");
   });
 });

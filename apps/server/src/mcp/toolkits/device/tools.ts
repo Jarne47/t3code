@@ -17,6 +17,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -24,21 +25,12 @@ const dependencies = [
   DeviceService.DeviceService,
 ];
 
-/** What a device tool fails with, including the access gate's refusal. */
 const DeviceToolFailure = Schema.Union([DeviceToolError, OrchestratorMcpFailure]);
 
-/**
- * Deliberately a small surface: lifecycle, visibility for the user, and one
- * image-returning verb. Driving the device (taps, typing, install, logs)
- * happens through the preconfigured `agent-device` CLI, which has the
- * semantic snapshot model agents need and stays current with its own
- * releases. Wrapping its commands here would only lag behind it.
- */
 const DeviceListTool = Tool.make("device_list", {
   description:
     "List iOS Simulators and Android Emulators on this environment's device hosts, which platforms each host can run, and which devices are already open in this thread's Device panel. Call this before device_open when you do not know a device id.",
-  // An empty struct serializes as `anyOf [object, array]`, which some
-  // providers reject and then drop every tool on the server with it.
+  // Empty Struct emits object|array, which can make providers reject every server tool.
   parameters: Schema.Struct({
     hostId: Schema.optional(
       Schema.String.annotate({ description: "Limit to one device host. Defaults to all hosts." }),
@@ -60,7 +52,14 @@ const DeviceOpenTool = Tool.make("device_open", {
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
-  dependencies: [...dependencies, FileSystem.FileSystem, Path.Path, ServerConfig.ServerConfig],
+  dependencies: [
+    ...dependencies,
+    FileSystem.FileSystem,
+    Path.Path,
+    ServerConfig.ServerConfig,
+    // The thread's project can name the EAS project a cloud device runs under.
+    ProjectService.ProjectService,
+  ],
 })
   .annotate(Tool.Title, "Open device")
   .annotate(Tool.Readonly, false)

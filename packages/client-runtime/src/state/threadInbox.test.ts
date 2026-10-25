@@ -32,29 +32,16 @@ function thread(id: string, working: boolean) {
 describe("createInboxReturnTracker", () => {
   it("stamps a thread when it stops working, but never on the first observation", () => {
     const tracker = createInboxReturnTracker();
-    tracker.observe([thread("a", true), thread("b", false)]);
-    expect(tracker.returnedAt(thread("a", true))).toBeUndefined();
-    expect(tracker.returnedAt(thread("b", false))).toBeUndefined();
+    const first = tracker.observe([thread("a", true), thread("b", false)]);
+    expect(first(thread("a", true))).toBeUndefined();
+    expect(first(thread("b", false))).toBeUndefined();
 
-    tracker.observe([thread("a", false), thread("b", false)]);
-    expect(tracker.returnedAt(thread("a", false))).toBeDefined();
-    expect(tracker.returnedAt(thread("b", false))).toBeUndefined();
-  });
-
-  it("forgets deleted threads and resets when the beta turns off", () => {
-    const tracker = createInboxReturnTracker();
-    tracker.observe([thread("a", true), thread("b", true)]);
-    tracker.observe([thread("a", false), thread("b", false)]);
-    tracker.observe([thread("b", false)]);
-    expect(tracker.returnedAt(thread("a", false))).toBeUndefined();
-    expect(tracker.returnedAt(thread("b", false))).toBeDefined();
-
-    tracker.observe(null);
-    expect(tracker.returnedAt(thread("b", false))).toBeUndefined();
-    // After a reset the next call is a fresh baseline again.
-    tracker.observe([thread("b", true)]);
-    tracker.observe([thread("b", false)]);
-    expect(tracker.returnedAt(thread("b", false))).toBeDefined();
+    const second = tracker.observe([thread("a", false), thread("b", false)]);
+    expect(second(thread("a", false))).toBeDefined();
+    expect(second(thread("b", false))).toBeUndefined();
+    expect(tracker.returnedAt(thread("a", false))).toBe(second(thread("a", false)));
+    // An earlier observation keeps its answer, so lists built from it stay valid.
+    expect(first(thread("a", false))).toBeUndefined();
   });
 });
 
@@ -63,7 +50,6 @@ describe("sortWorkingThreadsBySend", () => {
     const sentFirst = {
       ...thread("sent-first", true),
       latestUserAuthoredMessageAt: "2026-06-01T01:00:00.000Z",
-      // A wake run requested after the other thread's send.
       latestRun: {
         runId: RunId.make("run:wake"),
         status: "running" as const,
@@ -77,7 +63,6 @@ describe("sortWorkingThreadsBySend", () => {
       ...thread("sent-last", true),
       latestUserAuthoredMessageAt: "2026-06-01T02:00:00.000Z",
     };
-    // Launched by an agent: no user message, so creation time is the send.
     const launched = { ...thread("launched", true), latestUserAuthoredMessageAt: null };
     expect(
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),

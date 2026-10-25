@@ -39,10 +39,11 @@ let root: Root;
 let container: HTMLDivElement;
 let input: Omit<Input, "onSelect">;
 
-function Composer() {
+// Input arrives as a prop: the React Compiler treats module variables as constant.
+function Composer({ hookInput }: { hookInput: Omit<Input, "onSelect"> }) {
   const [model, setModel] = useState("original");
   useFavoriteModelShortcut({
-    ...input,
+    ...hookInput,
     onSelect: (instanceId, model) => setModel(`${instanceId}:${model}`),
   });
   return (
@@ -57,7 +58,7 @@ function Composer() {
 
 async function render(overrides: Partial<typeof input> = {}) {
   input = { ...input, ...overrides };
-  await act(() => root.render(<Composer />));
+  await act(() => root.render(<Composer hookInput={input} />));
 }
 
 async function jump(number: number, overrides: KeyboardEventInit = {}) {

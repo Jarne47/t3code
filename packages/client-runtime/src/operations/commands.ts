@@ -8,7 +8,7 @@ import {
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
   type ChatAttachment,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type NodeId,
   type OrchestrationV2Command,
@@ -26,6 +26,7 @@ import {
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
+  type GuestMessageId,
 } from "@t3tools/contracts";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -92,18 +93,15 @@ export interface UnsettleThreadInput extends ThreadCommandInput {
 }
 
 export interface PinThreadInput extends ThreadCommandInput {
-  /** Initial slot in the user-arranged pinned order; omit to pin keyless. */
   readonly orderKey?: string;
 }
 export type UnpinThreadInput = ThreadCommandInput;
 
 export interface ReorderPinnedThreadInput extends ThreadCommandInput {
-  /** Fractional-index key that sorts between the drop position's neighbors. */
   readonly orderKey: string;
 }
 
 export interface ReorderActiveThreadInput extends ThreadCommandInput {
-  /** Fractional-index key that sorts between the drop position's neighbors. */
   readonly orderKey: string;
 }
 
@@ -116,8 +114,10 @@ export interface UnsnoozeThreadInput extends ThreadCommandInput {
 }
 
 export interface VisitThreadInput extends ThreadCommandInput {
-  /** Watermark of the thread state the viewer has seen (ISO timestamp). */
   readonly visitedAt: string;
+  /** Counts toward search frecency; `searchQuery` is the palette query that picked it. */
+  readonly opened?: boolean;
+  readonly searchQuery?: string;
 }
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
@@ -128,11 +128,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly modelSelection?: ModelSelection;
   readonly branch?: string | null;
   readonly worktreePath?: string | null;
-  /** Kick off an async title regeneration for the thread. */
   readonly regenerateTitle?: boolean;
-  /** Link (object) or unlink (null) a pull request (#8160). */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
-  /** Apply only while no message or run has landed on the thread. */
   readonly expectedEmpty?: boolean;
 }
 
@@ -156,7 +153,6 @@ interface StartThreadBootstrap {
     readonly createdAt: string;
   };
   readonly prepareWorktree?: {
-    /** V2 worktree launches always fail rather than falling back to the project checkout. */
     readonly requireWorktree?: boolean;
     readonly projectCwd: string;
     readonly baseBranch: string;
@@ -174,6 +170,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext;
+    readonly idleCompaction?: import("@t3tools/contracts").OrchestrationV2IdleCompaction;
   };
   readonly modelSelection?: ModelSelection;
   readonly titleSeed?: string;
@@ -187,13 +184,13 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   readonly subagentId?: NodeId;
-  /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
 }
 
 export interface RespondToThreadApprovalInput extends ThreadCommandInput {
   readonly requestId: RuntimeRequestId;
   readonly decision: ProviderApprovalDecision;
+  readonly feedback?: string;
 }
 
 export interface RespondToThreadUserInputInput extends ThreadCommandInput {
@@ -228,6 +225,10 @@ export interface MergeThreadBackInput extends CommandMetadata {
   readonly runId: RunId;
 }
 
+export interface ResumeThreadQueueInput extends ThreadCommandInput {
+  readonly runId?: RunId;
+}
+
 export interface ReorderQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
   readonly beforeRunId: RunId | null;
@@ -251,9 +252,7 @@ export interface EditQueuedRunInput extends ThreadCommandInput {
   readonly text: string;
   /**
    * Full replacement attachment list for the queued message. Omitted =
-   * text-only edit that leaves attachments untouched. `dataUrl` entries are
-   * persisted against `messageId` (the queued run's user message) before
-   * dispatch, so `messageId` is required whenever attachments are present.
+   * text-only edit that leaves attachments untouched.
    */
   readonly edit?: {
     readonly messageId: MessageId;
@@ -420,7 +419,8 @@ function simpleThreadCommand(
     | "thread.unarchive"
     | "thread.settle"
     | "thread.pin"
-    | "thread.unpin",
+    | "thread.unpin"
+    | "thread.guest-share.close",
   input: ThreadCommandInput,
 ) {
   return allocateCommandId(input).pipe(
@@ -432,6 +432,45 @@ export const deleteThread = Effect.fn("EnvironmentCommands.deleteThread")(functi
   input: DeleteThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.delete", input);
+});
+
+export type CloseGuestShareInput = ThreadCommandInput;
+export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(function* (
+  input: CloseGuestShareInput,
+) {
+  return yield* simpleThreadCommand("thread.guest-share.close", input);
+});
+
+export interface ResolveGuestMessageInput extends ThreadCommandInput {
+  readonly guestMessageId: GuestMessageId;
+  readonly decision: "send" | "dismiss";
+  readonly creationSource?: "web" | "mobile";
+}
+/** Send runs the guest's text as a normal turn; the server supplies the text, not the client. */
+export const resolveGuestMessage = Effect.fn("EnvironmentCommands.resolveGuestMessage")(function* (
+  input: ResolveGuestMessageInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  if (input.decision === "dismiss") {
+    return yield* dispatch({
+      type: "thread.guest-message.dismiss",
+      commandId,
+      threadId: input.threadId,
+      guestMessageId: input.guestMessageId,
+    });
+  }
+  return yield* dispatch({
+    type: "message.dispatch",
+    commandId,
+    threadId: input.threadId,
+    messageId: MessageId.make(commandId),
+    guestMessageId: input.guestMessageId,
+    text: "",
+    attachments: [],
+    dispatchMode: { type: "queue_after_active" },
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+  });
 });
 
 export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(function* (
@@ -548,6 +587,8 @@ export const visitThread = Effect.fn("EnvironmentCommands.visitThread")(function
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     visitedAt: input.visitedAt,
+    ...(input.opened ? { opened: true } : {}),
+    ...(input.searchQuery ? { searchQuery: input.searchQuery } : {}),
   });
 });
 
@@ -705,6 +746,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         : { manualContinuationOfRunId: input.manualContinuationOfRunId }),
       text: input.message.text,
       ...(context ? { context } : {}),
+      ...(input.message.idleCompaction === undefined
+        ? {}
+        : { idleCompaction: input.message.idleCompaction }),
       attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       ...(input.sourceProposedPlan === undefined
@@ -766,6 +810,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     messageId: input.message.messageId,
     text: input.message.text,
     ...(context ? { context } : {}),
+    ...(input.message.idleCompaction === undefined
+      ? {}
+      : { idleCompaction: input.message.idleCompaction }),
     attachments,
     ...(shouldSendTitleSeed ? { titleSeed: input.titleSeed } : {}),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
@@ -777,29 +824,53 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   });
 });
 
-/**
- * Stop for the thread's latest work: interrupts the active run, or the settled run whose
- * background work still runs. With no run to stop, it ends the thread's pull request
- * watches, the only background work that has no run.
- */
 export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
   input: InterruptThreadTurnInput,
 ) {
+  let threadId = input.threadId;
   if (input.subagentId !== undefined) {
     const projection = yield* getProjection(input.threadId);
     const subagent = projection.subagents.find((agent) => agent.id === input.subagentId);
-    if (subagent?.runId == null) return { sequence: 0 };
-    return yield* dispatch({
-      type: "subagent.stop",
-      commandId: yield* allocateCommandId(input),
-      threadId: input.threadId,
-      runId: subagent.runId,
-      subagentId: subagent.id,
-    });
+    if (subagent?.origin === "app_owned" && subagent.childThreadId !== null) {
+      // The parent ends the task even when its child lost track of it. Older
+      // servers reject this for app-owned tasks, so the child stop below still runs.
+      if (subagent.runId !== null) {
+        yield* dispatch({
+          type: "subagent.stop",
+          commandId: yield* allocateCommandId({}),
+          threadId: input.threadId,
+          runId: subagent.runId,
+          subagentId: subagent.id,
+        }).pipe(Effect.ignore);
+      }
+      threadId = subagent.childThreadId;
+    } else {
+      if (subagent?.runId == null) return { sequence: 0 };
+      return yield* dispatch({
+        type: "subagent.stop",
+        commandId: yield* allocateCommandId(input),
+        threadId: input.threadId,
+        runId: subagent.runId,
+        subagentId: subagent.id,
+      });
+    }
   }
-  let runId = input.runId ?? (input.turnId as RunId | undefined);
+  // A run named by the caller belongs to the parent, not the rerouted child.
+  let runId =
+    threadId === input.threadId ? (input.runId ?? (input.turnId as RunId | undefined)) : undefined;
   if (runId === undefined) {
-    const projection = yield* getProjection(input.threadId);
+    const config = yield* getInitialServerConfig();
+    if (config.environment.capabilities.threadStop === true) {
+      // A paginated projection can omit commands still running from earlier turns.
+      return yield* dispatch({
+        type: "thread.stop",
+        commandId: yield* allocateCommandId(input),
+        threadId,
+      });
+    }
+  }
+  if (runId === undefined) {
+    const projection = yield* getProjection(threadId);
     runId = projection.runs.findLast(
       (run) =>
         run.status === "preparing" ||
@@ -828,7 +899,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
         result = yield* dispatch({
           type: "thread.pull-request.watch",
           commandId: yield* allocateCommandId(result.sequence === 0 ? input : {}),
-          threadId: input.threadId,
+          threadId,
           host: link.host,
           repository: link.repository,
           number: link.number,
@@ -842,7 +913,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   return yield* dispatch({
     type: "run.interrupt",
     commandId: yield* allocateCommandId(input),
-    threadId: input.threadId,
+    threadId,
     runId,
     holdQueue: true,
   });
@@ -856,6 +927,7 @@ export const respondToThreadApproval = Effect.fn("EnvironmentCommands.respondToT
       threadId: input.threadId,
       requestId: input.requestId,
       decision: input.decision,
+      ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
     });
   },
 );
@@ -981,10 +1053,12 @@ export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(
 });
 
 export const resumeThreadQueue = Effect.fn("EnvironmentCommands.resumeThreadQueue")(function* (
-  input: ThreadCommandInput,
+  input: ResumeThreadQueueInput,
 ) {
   return yield* dispatch({
-    type: "queue.resume",
+    ...(input.runId === undefined
+      ? { type: "queue.resume" as const }
+      : { type: "queued-run.start" as const, runId: input.runId }),
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
   });

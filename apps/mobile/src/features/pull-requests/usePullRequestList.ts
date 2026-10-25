@@ -17,7 +17,6 @@ import {
   type PullRequestListPages,
 } from "./pullRequestList";
 
-// Retain each environment's pages when moving between tabs or changing list scope.
 const pagesFamily = Atom.family((_key: string) =>
   Atom.make<PullRequestListPages | null>(null).pipe(Atom.setIdleTTL(5 * 60_000)),
 );
@@ -203,12 +202,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   const statsKey = JSON.stringify(
     targets.flatMap(({ environmentId }) => {
       const refs = visibleRows
-        .filter(
-          (row) =>
-            row.environmentId === environmentId &&
-            row.provider === "github" &&
-            row.additions + row.deletions === 0,
-        )
+        .filter((row) => row.environmentId === environmentId && row.additions + row.deletions === 0)
         .map(({ projectId, host, repository, number }) => ({
           projectId,
           host,

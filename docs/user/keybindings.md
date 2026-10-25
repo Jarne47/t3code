@@ -10,15 +10,13 @@ In **Settings → General → Send shortcut**, choose whether Enter sends, requi
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
 **Follow-up behavior** chooses Queue or Steer while the agent runs. Use
-`mod+Enter` to do the opposite for one message, or `mod`-click the send button.
-`mod+Alt+Enter` sends, keeps that thread running in the background, and opens a
-fresh new-thread composer. In a new thread, `mod+Enter` does the same. Change
-these shortcuts in **Settings → Keybindings** under **Composer: Opposite Queue or
-Steer Action**, **Composer: Start in Background**, or **Composer: Send and Start
-New Thread**.
-
-When the send shortcut requires `mod+Enter`, that chord always sends with your
-follow-up behavior. Use `mod`-click or bind another key to do the opposite.
+`mod+Enter` to do the opposite for one message, even when the send shortcut
+requires a modifier. `mod+Alt+Enter` sends, keeps that thread running in the
+background, and opens a fresh new-thread composer. In a new thread, `mod+Enter`
+does the same. Change these shortcuts in **Settings → Keybindings** under
+**Composer: Opposite Queue or Steer Action**, **Composer: Start in Background**,
+or **Composer: Send and Start New Thread**. These bindings take priority over the
+send shortcut. Click the send button to use the configured follow-up behavior.
 
 When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
 steer. Change it under **Queue: Send First Queued Message as Steer** in Keybindings.
@@ -35,6 +33,11 @@ Use `Ctrl+Option+1` through `Ctrl+Option+9` on macOS, or `Ctrl+Alt+1` through
 `Ctrl+Alt+9` on Windows and Linux, to select a favorite model while typing.
 The numbers follow the selectable models in the picker's Favorites list.
 Customize these under **Composer: Favorite Model** in Settings → Keybindings.
+
+To change effort one step without opening the picker, bind
+**Composer: Increase Effort** and **Composer: Decrease Effort** in Keybindings.
+Both are unbound by default. Increase wraps from the highest level to the
+lowest, and decrease wraps from the lowest level to the highest.
 
 In the model picker, press Left in an empty search field or Shift+Tab to reach
 the provider list. Use Up/Down to move and Enter to choose. Right returns to
@@ -152,8 +155,9 @@ shortcut; assign one in **Settings → Keybindings**.
 bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
 draft. Consecutive
 actions of the same kind undo together. The notice remains available for five
-seconds after the latest action. The default shortcut skips text fields and
-terminals so native undo keeps working there.
+seconds after the latest action. Right after an action, the shortcut works even
+in a text field such as the composer. Once you type or press another key, the
+field gets its own undo back. Terminals always keep their native shortcut.
 
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
 through the pages you have visited, like a browser's back and forward buttons.
@@ -190,4 +194,4 @@ Change **Settings → General → Confirmations → Quit shortcut** to **Direct*
 single press or **Double press** for two presses only. Choosing **Quit** from the
 application menu always quits immediately.
 
-`sidebar.toggleLayout` (Mod+Shift+B) switches between the legacy project tree and the new sidebar. `sidebar.toggle` (Mod+B) continues to show or hide the sidebar.
+`sidebar.toggleLayout` switches between the legacy project tree and the new sidebar; it is unbound by default. `sidebar.toggle` (Mod+B) continues to show or hide the sidebar.

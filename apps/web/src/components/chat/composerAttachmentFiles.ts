@@ -10,7 +10,7 @@ import {
 
 import type { ComposerFileAttachment, ComposerImageAttachment } from "../../composerDraftStore";
 import { isHeicImageFile } from "../../lib/imageCompression";
-import { isVideoAttachment } from "../../types";
+import { isVideoAttachment, videoMimeType } from "../../types";
 
 type ComposerAttachmentFileKind = "image" | "file" | "unsupported-image";
 
@@ -29,12 +29,10 @@ const IMAGE_MIME_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
 };
 
 /**
- * Some sources (drags from other apps, files piped through a shell) hand over
- * a `File` with an empty or generic MIME type. Maps the extension to a
- * provider-supported image type so a plain `photo.jpg` still lands on the
- * image path; anything unrecognized stays a generic file.
+ * Some sources (drags from other apps, files piped through a shell) hand over a
+ * `File` with an empty or generic MIME type.
  */
-export function inferImageMimeTypeFromName(name: string): string | null {
+function inferImageMimeTypeFromName(name: string): string | null {
   const dotIndex = name.lastIndexOf(".");
   if (dotIndex <= 0) {
     return null;
@@ -50,7 +48,6 @@ function inferImageMimeTypeForUnknownFile(file: Pick<File, "name" | "type">): st
   return inferImageMimeTypeFromName(file.name);
 }
 
-/** Give extension-recognized images a concrete type before compression. */
 export function normalizeComposerImageFileMimeType(file: File): File {
   const inferredMimeType = inferImageMimeTypeForUnknownFile(file);
   if (!inferredMimeType) {
@@ -62,9 +59,29 @@ export function normalizeComposerImageFileMimeType(file: File): File {
   });
 }
 
+function isDngFile(file: Pick<File, "name" | "type">): boolean {
+  const mimeType = file.type.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    file.name.toLowerCase().endsWith(".dng") ||
+    mimeType === "image/dng" ||
+    mimeType === "image/x-dng" ||
+    mimeType === "image/x-adobe-dng"
+  );
+}
+
+export function composerFileAttachmentMimeType(file: Pick<File, "name" | "type">): string {
+  // Downstream image detection uses MIME, even for attachments staged as files.
+  if (isDngFile(file)) return "image/x-adobe-dng";
+  return (
+    videoMimeType({ name: file.name, mimeType: file.type }) ??
+    (file.type || "application/octet-stream")
+  );
+}
+
 export function classifyComposerAttachmentFile(
   file: Pick<File, "name" | "type">,
 ): ComposerAttachmentFileKind {
+  if (isDngFile(file)) return "file";
   if (isHeicImageFile(file)) {
     return "image";
   }
@@ -88,7 +105,6 @@ export function isPreviewableComposerVideo(
   );
 }
 
-/** Non-media files without an inline reference still need the legacy attachment row. */
 export function composerOtherFilesForPresentation(
   files: ReadonlyArray<ComposerFileAttachment>,
   environmentId: EnvironmentId,
@@ -99,7 +115,6 @@ export function composerOtherFilesForPresentation(
   );
 }
 
-/** Byte limit for adding a generic file to the local composer draft. */
 export function fileAttachmentStagingLimit(input: FileAttachmentCapabilityState): number | null {
   if (!input.attachmentUploadsCapabilityKnown) {
     return PROVIDER_SEND_TURN_MAX_FILE_BYTES;
@@ -110,7 +125,6 @@ export function fileAttachmentStagingLimit(input: FileAttachmentCapabilityState)
   return clampFileAttachmentUploadBytes(input.maxFileAttachmentBytes);
 }
 
-/** Why retained generic files cannot send with the current server config. */
 export function fileAttachmentCapabilityBlockReason(
   input: FileAttachmentCapabilityState & {
     readonly files: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
@@ -133,14 +147,7 @@ export function fileAttachmentCapabilityBlockReason(
   return null;
 }
 
-/**
- * When `capabilities.attachmentUploads` flips off (reconnect, version skew),
- * tear down only uploads that have not been persisted onto a draft file.
- * Once `uploadedAttachmentId` is stamped, the draft references that server
- * copy after reload even if its local `File` is still available in memory.
- * Explicit attachment removal releases persisted uploads through
- * `releaseDraftAttachment`.
- */
+/** Release only unpersisted uploads; hydrated files still need their server copies. */
 export function attachmentsToReleaseOnUploadCapabilityLoss(
   attachments: ReadonlyArray<ComposerImageAttachment | ComposerFileAttachment>,
 ): Array<ComposerImageAttachment | ComposerFileAttachment> {
@@ -149,19 +156,13 @@ export function attachmentsToReleaseOnUploadCapabilityLoss(
   );
 }
 
-/**
- * Whether a paste's files should be claimed as composer attachments instead of
- * falling through to the default text paste. Deliberately no capacity or
- * pending-plan-question gate here: `addComposerAttachments` owns those limits
- * and reports them, while a gate at this layer would swallow the paste with no
- * feedback.
- */
 export function shouldHandleComposerAttachmentPaste(input: {
   readonly files: ReadonlyArray<File>;
   readonly plainText: string;
 }): boolean {
   if (
     input.files.some((file) => {
+      if (isDngFile(file)) return true;
       const classification = classifyComposerAttachmentFile(file);
       return classification === "image" || classification === "unsupported-image";
     })

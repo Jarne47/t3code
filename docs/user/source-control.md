@@ -87,6 +87,11 @@ export T3CODE_BITBUCKET_EMAIL="you@example.com"
 export T3CODE_BITBUCKET_API_TOKEN="your-token"
 ```
 
+For a background service, put these `KEY=VALUE` entries in
+[`service.env`](./background-service.md#configure-the-service-environment)
+under T3 home, then run `t3 service restart`. Service installation and updates
+preserve that file.
+
 ### Azure DevOps
 
 Install [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), add the DevOps extension, and sign in:
@@ -111,7 +116,7 @@ kept in the server's secret store, applies right away, and is used before `CAFE_
 sent to `git.cafe`; `CAFE_TOKEN` follows `CAFE_HOST` if you set it. Repositories on
 `staging.git.cafe` need their own login with `--host https://staging.git.cafe/api`.
 
-Line comments, reviewer requests, and labels are not available for GitCafe pull requests yet.
+Line comments are not available for GitCafe pull requests yet.
 Merging a stack lands it through GitCafe, and updating a branch restacks the layers above it.
 
 ## Start, clone, or publish a project
@@ -129,7 +134,9 @@ Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository.
 provider or paste a Git URL, then choose where to save it. The project opens right away while the
 clone runs in the background: you can write your first prompt, and sending waits until the files
 are in place. A toast tracks progress and lets you cancel; if the clone fails, retry it from the
-toast or from the banner above the composer.
+toast or from the banner above the composer. When the host refuses the machine's SSH key, T3 Code
+clones over HTTPS with Git's credentials for that host instead, and the project's remote uses the
+HTTPS URL.
 
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
@@ -138,7 +145,8 @@ make your first commit before pushing.
 ## Create a pull request
 
 Use a thread's Git actions to commit, push, and create a pull request. T3 Code can generate commit
-messages, review titles, and descriptions from your changes.
+messages, review titles, and descriptions from your changes. Descriptions also draw on the work in
+the thread, including the checks it ran.
 
 An existing fork PR can appear beside the branch even if you pushed without setting an upstream.
 If its badge is missing because several remotes hold that branch, set the branch's upstream to
@@ -175,15 +183,16 @@ Press **Escape** before releasing to cancel. Failed closes stay in the list so y
 GitHub, GitLab, and Azure DevOps support auto-merge while checks are outstanding. GitHub also
 supports approving waiting fork workflows and opening a revert pull request for a merged change.
 
-GitHub sharing is off by default. In Settings → Connections → GitHub sharing (Environments on mobile), choose
-**Read PRs** or **Read and act** for each environment you trust to share GitHub access.
+Pull request sharing is off by default. In Settings → Connections → Pull request sharing (Pull
+request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
+environment you trust to share its source control access.
 Enable both the original environment and the environment answering its requests on this client.
-**Read and act** can use broader GitHub permissions than the original environment's credential;
+**Read and act** can use broader permissions than the original environment's credential;
 only enable it for environments you control and trust. Changing a saved endpoint or removing an
 environment clears its permission.
 
-GitHub review details, linked PR status, and permitted review actions can then use another
-connected environment signed in to the same GitHub account. Each needs a project on that host.
+Review details, linked PR status, and permitted review actions can then use another connected
+environment signed in to the same account on the same host. Each needs a project on that host.
 A connected local environment is preferred for actions and can answer slow or failed reads.
 Browsers and mobile clients need a paired environment to use its GitHub credentials.
 Credentials stay on their machines. Previously verified credentials remain usable for routing
@@ -283,7 +292,8 @@ watching inside GitHub's rate limit. Comments from your own account do not wake 
 when the pull request merges or closes, after 10 wakes in a row that bring only comments, after 8
 failed reads in a row, or when you press Stop on the thread. A rate limit only pauses watching.
 Settling or archiving a thread also ends all its watches. Unsettle the thread before starting a new
-watch. Subagents cannot watch pull requests; the thread that delegated to them does. To start or stop
+watch. Watching a pull request again does not repeat check or conflict news its last
+watch already reported; unlinking the pull request clears that. Subagents cannot watch pull requests; the thread that delegated to them does. To start or stop
 it yourself, use the row menu in the **Linked pull requests** panel. In the thread details card, a
 watched pull request shows an eye; click it to stop watching.
 

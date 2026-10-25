@@ -43,8 +43,7 @@ import { VoiceInputSession } from "./voiceInputSession";
 
 const INITIAL_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
 const VOICE_METERING_INTERVAL_MS = 80;
-// The native constructor takes platform-flattened options, as `useAudioRecorder`
-// builds them with expo-audio's internal `createRecordingOptions`.
+// The native constructor expects platform-flattened options, as built by useAudioRecorder.
 const { ios: IOS_RECORDING_OPTIONS, android: ANDROID_RECORDING_OPTIONS } =
   RecordingPresets.HIGH_QUALITY;
 const VOICE_RECORDING_OPTIONS = {
@@ -60,8 +59,7 @@ async function releaseVoiceRecordingAudio(): Promise<void> {
   try {
     await setAudioModeAsync({ allowsRecording: false });
   } finally {
-    // Expo does not deactivate AVAudioSession when recording stops or its
-    // category changes. Explicit deactivation resumes interrupted app audio.
+    // Expo never deactivates AVAudioSession after recording; do so to resume interrupted audio.
     await setIsAudioActiveAsync(false);
   }
 }
@@ -78,9 +76,7 @@ async function configureVoiceRecordingAudio(): Promise<void> {
   } catch (error) {
     try {
       await releaseVoiceRecordingAudio();
-    } catch {
-      // Keep the setup error. The controller has not started a recorder yet.
-    }
+    } catch {}
     throw error;
   }
 }
@@ -100,7 +96,6 @@ export function useGlobalVoiceInput() {
 
 function useVoiceInputRuntime() {
   const registry = use(RegistryContext);
-  // Dictation reads and records microphones without subscribing the provider to preferences.
   useAtomMount(mobilePreferencesAtom);
   useAtomMount(updateMobilePreferencesAtom);
   const [{ state, ownerKey, label }, setState] = useState({
@@ -127,7 +122,6 @@ function useVoiceInputRuntime() {
   const recorderRef = useRef<LazyVoiceRecorder<RecorderState> | null>(null);
 
   if (!sessionRef.current || !recorderRef.current) {
-    // The native recorder is created when dictation starts, not on app launch.
     const recorder = createLazyVoiceRecorder({
       create: () => new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS),
       onStatus: (status: RecordingStatus) => {
@@ -180,9 +174,7 @@ function useVoiceInputRuntime() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
-      // iOS reports `inactive` while its permission dialog is open. Only the
-      // real background state cancels preparation; recorder status handles
-      // calls and route interruptions during capture.
+      // iOS permission dialogs report inactive; cancel preparation only on background. Recorder status handles capture interruptions.
       if (nextState === "background") controller.appMovedToBackground();
     });
     return () => subscription.remove();
@@ -190,7 +182,6 @@ function useVoiceInputRuntime() {
 
   useEffect(
     () => () => {
-      // Dispose first so an active recording is stopped before the recorder is released.
       controller.dispose();
       recorder.release();
     },
@@ -254,8 +245,6 @@ function useVoiceInputRuntime() {
   const cancel = useCallback(() => controller.cancel(), [controller]);
 
   return {
-    // Store screenshots show the dictation button even on simulators, whose
-    // on-device transcription is unavailable.
     isAvailable: getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null,
     state,
     audioLevels,

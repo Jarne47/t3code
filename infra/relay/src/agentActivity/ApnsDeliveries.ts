@@ -24,6 +24,7 @@ import {
   sanitizeAgentActivityAggregateState,
   sanitizeApnsNotificationPayload,
 } from "./agentActivityPayloads.ts";
+import { makeAggregateState } from "./agentActivityAggregate.ts";
 import * as Apns from "./ApnsClient.ts";
 import {
   ApnsDeliveryJobLiveActivityAggregateMissing,
@@ -47,7 +48,7 @@ import {
   alertForAttentionTransition,
   alertForNewlyTerminal,
   alertForTerminalAggregate,
-  newlyTerminalRows,
+  rowPhasesChanged,
   shouldAlertForActivity,
 } from "./agentActivityAlerts.ts";
 export {
@@ -57,9 +58,6 @@ export {
 } from "./agentActivityAlerts.ts";
 
 const MIN_LIVE_ACTIVITY_UPDATE_INTERVAL_MS = 15_000;
-// How long a just-armed card may sit with an empty aggregate before an end is
-// warranted; covers the gap between arming on send and the environment's
-// first publish reaching the relay.
 const FRESHLY_ARMED_GRACE_MS = 2 * 60 * 1_000;
 const PERMANENT_APNS_TOKEN_REASONS = new Set([
   "BadDeviceToken",
@@ -178,10 +176,9 @@ function shouldUpdateLiveActivity(input: {
   if (aggregateNeedsAttention(input.nextAggregate)) {
     return true;
   }
-  // A thread finishing must never be throttled away: when a completion and a
-  // new start land in the same window, activeCount is unchanged and the Done
-  // transition (and its alert) would otherwise be suppressed.
-  if (newlyTerminalRows(input.previousAggregate, input.nextAggregate, true).length > 0) {
+  // Phase and row changes may be the last update until the next transition.
+  // Throttling them would leave the card showing a stale state indefinitely.
+  if (rowPhasesChanged(input.previousAggregate, input.nextAggregate)) {
     return true;
   }
   const lastDeliveryAtMs =
@@ -198,8 +195,7 @@ function shouldUpdateLiveActivity(input: {
   );
 }
 
-// Completions replayed long after the fact (server restarts republish every
-// recently-finished thread) must not ring the device again.
+// Restart replays of old completions must not ring again.
 
 function notificationForAggregate(input: {
   readonly target: LiveActivities.TargetRow;
@@ -221,9 +217,7 @@ function notificationForAggregate(input: {
   return notificationForActivity(activity);
 }
 
-// "suppressed" means a Live Activity owns this state but no update is due
-// (unchanged or throttled); callers must not fall back to an alert push, or
-// every republish of a waiting aggregate would ring the device.
+// Suppressed Live Activity updates must not fall back to alert pushes or unchanged replays would ring.
 function chooseLiveActivityDelivery(input: {
   readonly target: LiveActivities.TargetRow;
   readonly aggregate: RelayAgentActivityAggregateState | null;
@@ -241,24 +235,11 @@ function chooseLiveActivityDelivery(input: {
         }
       : null;
   }
-  // Activities are started by the app in the foreground, never remotely.
-  // Without a registered token there is nothing addressable; attention
-  // transitions fall back to the push notification channel until the user
-  // next arms the card from the app.
   if (!input.target.activity_push_token) {
     return null;
   }
-  // An armed card always shows content: live agents, or recently finished
-  // ones (the publisher keeps Done/Failed rows in the aggregate for a
-  // while). A null aggregate means there is truly nothing left to show, so
-  // the card ends — arming is cheap now that the app re-arms on any open
-  // with content.
   if (input.aggregate === null) {
-    // Except right after arming: the app arms the card the moment the user
-    // starts work, and the token registration's replay can land before the
-    // environment's first publish for the brand-new thread. Ending here
-    // would retire the token and orphan the card at its seed content, so a
-    // freshly armed card keeps its seed until real state arrives.
+    // Registration replay can precede a new thread's first publish; preserve a freshly armed card until state arrives.
     const armedAtMs = Option.match(
       input.target.remote_started_at === null
         ? Option.none()
@@ -429,11 +410,7 @@ interface LiveActivityDeliveryTarget {
   readonly aps_environment?: "sandbox" | "production" | null;
 }
 
-// Devices register the bundle id and APS environment of the build they run
-// (dev/preview/prod variants have distinct bundle ids; development-signed
-// builds get sandbox tokens). Sending with mismatched routing yields
-// DeviceTokenNotForTopic/BadDeviceToken, so per-device values override the
-// relay-wide defaults when present.
+// Bundle ids and APS environments vary by build; route per device to avoid DeviceTokenNotForTopic/BadDeviceToken.
 function credentialsForTarget(
   credentials: RelayConfiguration.ApnsCredentials,
   target: LiveActivityDeliveryTarget,
@@ -552,13 +529,7 @@ export const make = Effect.gen(function* () {
   const apns = yield* Apns.ApnsClient;
   const activityRows = yield* AgentActivityRows.AgentActivityRows;
 
-  // Start jobs are decided at publish time, but consecutive publishes land in
-  // the same queue batch: a start chosen from a running aggregate can be
-  // delivered moments after a newer terminal publish already ended the user's
-  // work, birthing an orphan activity that shows stale content forever (no
-  // token is ever registered for it, so nothing can update or end it).
-  // Re-validate at delivery time that the user still has live work; fail open
-  // on persistence errors so a database hiccup never drops a legitimate start.
+  // Recheck queued starts against newer terminal publishes. Fail open on database errors.
   const userStillHasLiveWork = Effect.fnUntraced(function* (userId: string) {
     const now = yield* DateTime.now;
     return yield* activityRows.listForUser({ userId }).pipe(
@@ -570,6 +541,26 @@ export const make = Effect.gen(function* () {
       ),
       Effect.catchCause((cause) =>
         Effect.logWarning("live-work recheck failed; allowing queued start", { cause }).pipe(
+          Effect.as(true),
+        ),
+      ),
+    );
+  });
+
+  const userHasContentToShow = Effect.fnUntraced(function* (userId: string) {
+    const now = yield* DateTime.now;
+    return yield* activityRows.listForUser({ userId }).pipe(
+      Effect.map(
+        (activeStates) =>
+          makeAggregateState({
+            activeStates,
+            terminalState: null,
+            nowMs: now.epochMilliseconds,
+          }) !== null,
+      ),
+      // Keep the card on persistence failures; a later sweep can retry.
+      Effect.catch((error) =>
+        Effect.logWarning("Content recheck failed; keeping the card", { error }).pipe(
           Effect.as(true),
         ),
       ),
@@ -596,9 +587,6 @@ export const make = Effect.gen(function* () {
             current.phase === input.phase &&
             current.updatedAt === input.updatedAt,
         ),
-        // A transient persistence failure must not permanently discard a
-        // legitimate alert. Fail open and let the signed job's retry/dedupe
-        // protections handle transport failures as usual.
         Effect.catchCause((cause) =>
           Effect.logWarning("agent-activity state recheck failed; allowing queued delivery", {
             cause,
@@ -643,8 +631,6 @@ export const make = Effect.gen(function* () {
     readonly userId: string;
     readonly notification: ApnsNotificationPayload;
   }) {
-    // Jobs from older relay versions do not carry a state identity. Preserve
-    // backwards compatibility and only revalidate newly queued jobs.
     if (input.notification.phase === undefined || input.notification.updatedAt === undefined) {
       return true;
     }
@@ -764,6 +750,20 @@ export const make = Effect.gen(function* () {
         yield* attempts.completeSourceJob({
           sourceJobId: input.sourceJobId,
           apnsReason: "Stale agent activity state skipped.",
+        });
+        return staleJobResult({ deviceId: input.target.device_id, kind: input.kind });
+      }
+      // A contentless end must not retire a card that newer work now owns. An
+      // end for a device that turned Live Activities off still goes out.
+      if (
+        input.kind === "live_activity_end" &&
+        aggregate === null &&
+        parsePreferences(currentTarget.preferences_json)?.liveActivitiesEnabled !== false &&
+        (yield* userHasContentToShow(input.target.user_id))
+      ) {
+        yield* attempts.completeSourceJob({
+          sourceJobId: input.sourceJobId,
+          apnsReason: "Stale APNs end job skipped.",
         });
         return staleJobResult({ deviceId: input.target.device_id, kind: input.kind });
       }
@@ -1149,10 +1149,7 @@ export const make = Effect.gen(function* () {
             aggregate: input.aggregate,
             nowMs: input.nowMs,
           });
-      // The end event doubles as the "task finished" moment. When a companion
-      // push notification is about to ring the device (below), the activity end
-      // stays silent; otherwise the end itself carries the alert so LA-only
-      // users still get the buzz.
+      // Use the end alert only when no companion notification will ring, preserving feedback for Live-Activity-only users.
       const alert = input.replay
         ? null
         : delivery.kind === "live_activity_end"

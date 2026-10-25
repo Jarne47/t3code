@@ -1,3 +1,6 @@
+import { AsyncResult } from "effect/reactivity";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import * as Dialog from "../../components/ui/Dialog";
 import { useNavigation, useNavigationState, useRoute } from "@react-navigation/native";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import {
@@ -8,10 +11,10 @@ import {
   type PullRequestLinkedThreadsResult,
 } from "@t3tools/contracts";
 import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
-import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { normalizeThreadPullRequestKey } from "@t3tools/client-runtime/thread-pull-requests";
 import { useRef, useState } from "react";
-import { Alert, Platform } from "react-native";
+import { Platform } from "react-native";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 import { pullRequestComposerContext } from "../../lib/composerContext";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -38,7 +41,6 @@ import {
 
 type LinkedThread = PullRequestLinkedThreadsResult["threads"][number];
 
-/** Stay in the PR's environment when entering a thread or creating its draft. */
 export function usePullRequestThreads(
   params: PullRequestParams,
   pr: PullRequestDetail | null,
@@ -47,15 +49,14 @@ export function usePullRequestThreads(
   const target = pullRequestTarget(params);
   const config = useEnvironmentServerConfig(target.environmentId);
   const supported = threadPullRequestLinkMode(config?.environment.capabilities) === "multiple";
-  const parsed = pr ? parseChangeRequestUrl(pr.url) : null;
+  const parsed = pr ? sourceControlClients.parseChangeRequestUrl(pr.url)?.link : undefined;
   const reference = {
     ...target,
     input: { ...target.input, ...(parsed ? normalizeThreadPullRequestKey(parsed) : {}) },
   };
   const key = JSON.stringify(reference);
   const route = useRoute();
-  // The iOS split host projects detail screens beneath a synthetic workspace
-  // route. Its parent's focus flag is not the visible detail's focus flag.
+  // The iOS synthetic workspace parent's focus differs from the visible detail's focus.
   const focused = useNavigationState((state) => state.routes[state.index]?.key === route.key);
   const relations = useEnvironmentQuery(
     pr && supported && focused ? composerPullRequests.linkedThreads(reference) : null,
@@ -67,7 +68,6 @@ export function usePullRequestThreads(
     (relations.data ?? (lastRelations.key === key ? lastRelations.data : null))?.threads ?? [];
   const connected = usePullRequestConnected(params.environmentId);
   const canOperate = useEnvironmentScope(target.environmentId, AuthOrchestrationOperateScope);
-  // Composing offline only writes a local draft. The outbox checks grants on delivery.
   const canAsk = !connected || canOperate;
   const canCheckout = useEnvironmentScope(target.environmentId, AuthSourceControlWriteScope);
   const navigation = useNavigation();
@@ -82,11 +82,14 @@ export function usePullRequestThreads(
   const [busy, setBusy] = useState(false);
   const ask = async (thread?: LinkedThread, task: PullRequestAgentTask = "ask") => {
     if (!pr || !canAsk || pending.current) return;
+    const terminology = sourceControlClients.get(pr.provider).changeRequest;
     pending.current = true;
     setBusy(true);
-    try {
+    const result = await settlePromise(async () => {
       if (connected && !thread && !canCheckout)
-        throw new Error("Starting work from this PR requires source control write access.");
+        throw new Error(
+          `Starting work from this ${terminology.shortLabel} requires source control write access.`,
+        );
       await waitForComposerDraftsLoaded();
       const draftKey = thread
         ? scopedThreadKey(target.environmentId, ThreadId.make(thread.id))
@@ -140,20 +143,25 @@ export function usePullRequestThreads(
       const withContext = getComposerDraftSnapshot(draftKey);
       setComposerDraftText(
         draftKey,
-        appendPullRequestAgentPrompt(withContext.text, task, previousPrompts.current.get(draftKey)),
+        appendPullRequestAgentPrompt(
+          withContext.text,
+          task,
+          terminology,
+          previousPrompts.current.get(draftKey),
+        ),
       );
-      previousPrompts.current.set(draftKey, pullRequestAgentPrompt(task));
+      previousPrompts.current.set(draftKey, pullRequestAgentPrompt(task, terminology));
       if (thread) openThread(thread);
       else
-        navigation.navigate("NewTaskSheet", {
-          screen: "NewTaskDraft",
-          params: { draftId: draftKey, title: `Ask about #${pr.number}` },
+        navigation.navigate("Thread", {
+          draft: { draftId: draftKey, title: `Ask about #${pr.number}` },
         });
-    } catch (cause) {
-      Alert.alert("Couldn't open a thread", cause instanceof Error ? cause.message : "Try again.");
-    } finally {
-      pending.current = false;
-      setBusy(false);
+    });
+    pending.current = false;
+    setBusy(false);
+    if (AsyncResult.isFailure(result)) {
+      const cause = squashAtomCommandFailure(result);
+      Dialog.alert("Couldn't open a thread", cause instanceof Error ? cause.message : "Try again.");
     }
   };
   return {

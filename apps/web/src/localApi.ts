@@ -29,8 +29,6 @@ function createBrowserLocalApi(): LocalApi {
 
         window.open(url, "_blank", "noopener,noreferrer");
       },
-      // Only the desktop shell can reach the OS; the web build (and older
-      // desktop shells that predate this method) have nothing to open.
       openSystemSettings: async (pane) => {
         if (!window.desktopBridge?.openSystemSettings) {
           throw new Error("Unable to open System Settings.");
@@ -51,9 +49,7 @@ function createBrowserLocalApi(): LocalApi {
         }
         return showContextMenuFallback(items, position);
       },
-      // A native desktop menu blocks keyboard input and closes on outside
-      // interaction, so nothing to do there; the DOM fallback needs an explicit
-      // dismiss when the state behind it goes away.
+      // Unlike native menus, the DOM fallback needs dismissal when underlying state disappears.
       close: async () => {
         if (!window.desktopBridge) {
           dismissContextMenu();

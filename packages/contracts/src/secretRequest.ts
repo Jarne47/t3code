@@ -2,10 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 
-/**
- * The user's answer to an agent's request for a secret. A saved value is kept
- * by the server under a one-use SecretRef; the thread learns only the status.
- */
+/** Server stores the value under a one-use SecretRef; the thread learns only status. */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
   turnItemId: TurnItemId,
@@ -38,7 +35,6 @@ export const SecretRequestFailureReason = Schema.Literals(
 );
 export type SecretRequestFailureReason = typeof SecretRequestFailureReason.Type;
 
-/** Answering a request or using its ref failed; the message is shown to users and agents. */
 export class SecretRequestError extends Schema.TaggedError<SecretRequestError>()(
   "SecretRequestError",
   {

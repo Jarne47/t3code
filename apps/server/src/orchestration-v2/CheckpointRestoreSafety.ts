@@ -9,8 +9,7 @@ import type * as ProjectStore from "./ProjectStore.ts";
 export const SHARED_WORKSPACE_RESTORE_MESSAGE =
   "File restore requires an isolated worktree. This workspace may contain changes from another thread. Rewind the conversation without restoring files instead.";
 
-// A checkpoint snapshots the whole checkout. Check at command admission and
-// again before provider rollback so a newly shared worktree is rejected too.
+// Check isolation at admission and rollback; checkpoints restore whole checkouts, which may become shared.
 export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpointRestoreIsolated")(
   function* (
     thread: Pick<OrchestrationV2AppThread, "id" | "worktreePath">,
@@ -33,8 +32,19 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
     const worktreePath = thread.worktreePath;
     let shared = worktreePath == null;
     if (!shared && worktreePath !== null) {
-      const cwd = yield* fileSystem.realPath(scope.cwd);
-      const worktreeCwd = yield* fileSystem.realPath(worktreePath);
+      // Storage cleanup may have removed the worktree; rollback recreates it.
+      const resolve = (target: string) =>
+        fileSystem
+          .realPath(target)
+          .pipe(
+            Effect.catch((error) =>
+              error.reason._tag === "NotFound"
+                ? Effect.succeed(path.resolve(target))
+                : Effect.fail(error),
+            ),
+          );
+      const cwd = yield* resolve(scope.cwd);
+      const worktreeCwd = yield* resolve(worktreePath);
       shared = cwd !== worktreeCwd;
       if (!shared) {
         const shell = yield* projections.getShellSnapshot();
@@ -46,10 +56,8 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
           const paths = [
             otherThread.worktreePath,
             ...other.checkpointScopes.map((candidate) => candidate.cwd),
-            // A failed turn can leave an errored session with a live event stream.
-            // A session shared across threads keeps the cwd it was opened with,
-            // often another thread's; each turn runs in the thread's own
-            // worktree or project root, which this list already covers.
+            // Errored sessions can still stream. Shared sessions retain another thread's opening cwd;
+            // turn worktrees and project roots are already covered here.
             ...providerContext.providerSessions
               .filter(
                 (session) =>
@@ -59,7 +67,6 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
               .map((session) => session.cwd),
           ].filter((value): value is string => value !== null);
           if (otherThread.worktreePath === null) {
-            // A thread without a worktree works in its project's checkout.
             const project = yield* projects.get(otherThread.projectId, { includeDeleted: true });
             if (Option.isNone(project)) return false;
             paths.push(project.value.workspaceRoot);

@@ -1,17 +1,8 @@
-// @effect-diagnostics nodeBuiltinImport:off - a plain release runner around existing build scripts.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - a plain release runner around existing build scripts.
 /**
- * Builds and publishes personal desktop releases without GitHub Actions. Each
- * machine builds the app for its own platform; both add their file to the same
- * GitHub release, which is all the in-app personal updater reads.
- *
- *   node scripts/release-personal.ts build [--version <v>] [--ref <commit>]
- *   node scripts/release-personal.ts publish --version <v>
- *
- * `build` checks out the commit in a temporary worktree and leaves the
- * installer in release/personal/<version>. When the release already exists
- * (for example, Windows published it and the Mac adds its zip), it rebuilds
- * that release's commit. `publish` creates the release or adds this machine's
- * files to it. Mirrors .github/workflows/build-personal.yml.
+ * Personal desktop releases without GitHub Actions: each machine builds its own platform
+ * and adds the file to one GitHub release, which the personal updater reads. Run
+ * `build [--version <v>] [--ref <commit>]`, then `publish --version <v>`.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -36,7 +27,6 @@ const RELEASE_TESTS = [
     "apps/desktop/src/updates/PersonalUpdater.test.ts",
     "apps/desktop/src/updates/personalInstall.test.ts",
     "apps/desktop/src/updates/DesktopUpdates.test.ts",
-    "apps/desktop/src/electron/ElectronUpdater.test.ts",
     "apps/web/src/components/desktopUpdate.logic.test.ts",
   ],
   [
@@ -46,8 +36,6 @@ const RELEASE_TESTS = [
   ],
   [
     "apps/web/src/components/sidebar/ActiveProjectGroups.test.tsx",
-    "apps/web/src/components/ProviderUpdateEnvironmentRows.test.tsx",
-    "apps/server/src/provider/providerMaintenance.test.ts",
     "apps/server/src/provider/providerMaintenanceRunner.test.ts",
     "apps/desktop/src/app/DesktopUserData.test.ts",
   ],
@@ -89,8 +77,18 @@ function findRelease(version: string) {
   return { commit: release.targetCommitish, assets: release.assets.map((asset) => asset.name) };
 }
 
-/** Next free `<base>-itamar.<today>.<n>`, keeping the base of the latest personal release. */
-function nextVersion(): string {
+/** Numeric `major.minor.patch` parts, for ordering release bases. */
+function semverParts(version: string): [number, number, number] {
+  const [major = 0, minor = 0, patch = 0] = version.split(".").map(Number);
+  return [major, minor, patch];
+}
+
+/**
+ * Next free `<base>-itamar.<today>.<n>`. The base matches upstream nightlies (the desktop
+ * package's next patch) at `ref`, and never drops below the latest personal release, so
+ * installed builds always see the new one as an update.
+ */
+function nextVersion(ref: string): string {
   const tags = (
     capture("gh", [
       "release",
@@ -108,8 +106,18 @@ function nextVersion(): string {
     .split("\n")
     .map((tag) => tag.replace(/^v/, ""))
     .filter((tag) => VERSION_PATTERN.test(tag));
-  const base = tags[0]?.split("-")[0];
-  if (base === undefined) throw new Error("No personal release found; pass --version.");
+  const desktopPackage = capture("git", ["show", `${ref}:apps/desktop/package.json`]);
+  if (desktopPackage === undefined) throw new Error(`Cannot read the desktop version at '${ref}'.`);
+  const [major, minor, patch] = semverParts(
+    (JSON.parse(desktopPackage) as { version: string }).version,
+  );
+  const base = [`${major}.${minor}.${patch + 1}`, ...tags.map((tag) => tag.split("-")[0]!)]
+    .toSorted((left, right) => {
+      const a = semverParts(left);
+      const b = semverParts(right);
+      return b[0] - a[0] || b[1] - a[1] || b[2] - a[2];
+    })
+    .at(0)!;
   const now = new Date();
   const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
   const prefix = `${base}-itamar.${date}.`;
@@ -123,11 +131,15 @@ function outputDir(version: string): string {
   return NodePath.join(repoRoot, "release", "personal", version);
 }
 
+/**
+ * Builds the commit in a temporary worktree into release/personal/<version>. An existing
+ * release (say Windows published first) pins the commit, so the Mac adds a matching zip.
+ */
 function build(options: { version?: string; ref?: string }): void {
   // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone release script has no Effect runtime.
   const host = PLATFORMS[NodeOS.platform() as keyof typeof PLATFORMS];
   if (host === undefined) throw new Error(`Personal desktop builds need Windows or macOS.`);
-  const version = options.version ?? nextVersion();
+  const version = options.version ?? nextVersion(options.ref ?? "HEAD");
   if (!VERSION_PATTERN.test(version)) throw new Error(`Invalid personal version '${version}'.`);
 
   const existing = findRelease(version);

@@ -15,9 +15,8 @@ const SettingsWindow = Schema.NullOr(
 export type SettingsWindow = typeof SettingsWindow.Type;
 const decodeSettingsWindow = Schema.decodeUnknownSync(Schema.fromJsonString(SettingsWindow));
 
-// Window bounds and owner PIDs are available before Screen Recording is granted.
-// Use the bundle identifier rather than the localized app/window title. A single
-// process avoids launching osascript repeatedly while the user moves Settings.
+// Window bounds/PIDs need no Screen Recording grant. Match the bundle id to avoid localized titles.
+// Keep one osascript process while Settings moves.
 const SETTINGS_WINDOW_SCRIPT = `
 ObjC.import("CoreGraphics");
 ObjC.import("AppKit");
@@ -56,7 +55,6 @@ function run() {
   }
 }`;
 
-/** Place the panel inside Settings' content column, above its bottom edge. */
 export function settingsHelperBounds(settings: NonNullable<SettingsWindow>): Electron.Rectangle {
   const sidebarWidth = 216;
   const inset = 16;
@@ -69,7 +67,6 @@ export function settingsHelperBounds(settings: NonNullable<SettingsWindow>): Ele
   };
 }
 
-/** Track only metadata; this does not request Accessibility or Screen Recording. */
 export function watchMacSettingsWindow(
   onChange: (window: SettingsWindow) => void,
   onUnavailable: () => void,

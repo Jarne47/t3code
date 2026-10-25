@@ -1,3 +1,4 @@
+import * as Dialog from "../../components/ui/Dialog";
 import {
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
@@ -7,14 +8,14 @@ import {
   sessionGrantsScope,
 } from "@t3tools/contracts";
 import { type KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
-import { SymbolView } from "../../components/AppSymbol";
-import { ScreenHeader } from "../../components/ScreenHeader";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppBar } from "../../components/ui/AppBar";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Platform, Pressable, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { TerminalContextSheet } from "./TerminalContextSheet";
 import { hasNativeTerminalSurface } from "./nativeTerminalModule";
 import * as Clipboard from "expo-clipboard";
@@ -31,12 +32,12 @@ import {
   ComposerToolbarRow,
   ComposerToolbarScroller,
 } from "../../components/ComposerToolbar";
-import { EmptyState } from "../../components/EmptyState";
-import { GlassSurface } from "../../components/GlassSurface";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { GlassSurface } from "../../components/ui/GlassSurface";
 import { LoadingScreen } from "../../components/LoadingScreen";
-import { MaterialScreenContent } from "../../components/MaterialScreenContent";
-import { MaterialButton } from "../../components/MaterialButton";
-import { MaterialIconButton } from "../../components/MaterialIconButton";
+import { ScreenContent } from "../../components/ui/ScreenContent";
+import { Button } from "../../components/ui/Button";
+import { IconButton } from "../../components/ui/IconButton";
 import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { terminalEnvironment } from "../../state/terminal";
@@ -69,7 +70,7 @@ import {
   TERMINAL_BUFFER_REPLAY_STABILITY_DELAY_MS,
 } from "./terminalBufferReplay";
 import {
-  resolveTerminalOpenLocation,
+  useInitialTerminalLaunchLocation,
   takePendingTerminalLaunch,
   type PendingTerminalLaunch,
 } from "./terminalLaunchContext";
@@ -109,7 +110,7 @@ function TerminalHeader(props: {
   readonly onSelectTerminal: (terminalId: string) => void;
 }) {
   return (
-    <ScreenHeader
+    <AppBar
       title="Terminal"
       subtitle={props.subtitle}
       onBack={props.onCloseTerminal}
@@ -203,8 +204,6 @@ type TerminalToolbarAction =
       readonly modifier: PendingModifier;
     };
 
-// A blank param (a hand-typed deep link) is treated as missing, since branded
-// IDs reject whitespace-only values.
 function firstRouteParam(value: string | string[] | undefined): string | null {
   const first = Array.isArray(value) ? value[0] : value;
   return first === undefined || first.trim().length === 0 ? null : first;
@@ -293,8 +292,14 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const isEnvironmentReady = environment.presentation?.connection.phase === "connected";
   const requestedTerminalId = firstRouteParam(params.terminalId);
   const terminalId = requestedTerminalId ?? DEFAULT_TERMINAL_ID;
+  // Any new positive value triggers capture, even on remount. Pass one only while pending and keep increasing it.
+  const captureSequenceRef = useRef(0);
   const [captureRequest, setCaptureRequest] = useState(0);
   const [capturedOutput, setCapturedOutput] = useState<string | null>(null);
+  const requestCapture = () => {
+    captureSequenceRef.current += 1;
+    setCaptureRequest(captureSequenceRef.current);
+  };
   const {
     isReady: hasResolvedFontPreference,
     appearance,
@@ -377,7 +382,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const lastBufferReplayKeyRef = useRef<string | null>(null);
   const sentInitialInputKeyRef = useRef<string | null>(null);
   const [readyBufferReplayKey, setReadyBufferReplayKey] = useState<string | null>(null);
-  /** Default grid is always valid for attach; onResize refines cols/rows. Requiring a cached size blocked bootstrap for new terminal routes. */
   const [hasMeasuredSurface, setHasMeasuredSurface] = useState(true);
   const [pendingModifierState, setPendingModifierState] = useState<{
     readonly terminalId: string;
@@ -390,36 +394,25 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     requestedTerminalId === null &&
     runningSession !== null &&
     runningSession.target.terminalId !== terminalId;
-  const launchLocationCandidate = useMemo(() => {
-    if (!selectedThread || !selectedThreadProject?.workspaceRoot) {
-      return null;
-    }
-    if (pendingLaunch) {
-      return {
-        cwd: pendingLaunch.cwd,
-        worktreePath: pendingLaunch.worktreePath,
-      };
-    }
-    return resolveTerminalOpenLocation({
-      terminalLocation: activeKnownSession?.state.summary ?? null,
-      activeSessionLocation: activeKnownSession?.state.summary ?? null,
-      workspaceRoot: selectedThreadProject.workspaceRoot,
-      threadShellWorktreePath: selectedThread.worktreePath ?? null,
-      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
-    });
-  }, [
-    activeKnownSession?.state.summary,
+  const launchLocation = useInitialTerminalLaunchLocation({
+    targetKey: launchTargetKey,
     pendingLaunch,
-    selectedThread,
-    selectedThreadDetailWorktreePath,
-    selectedThreadProject?.workspaceRoot,
-  ]);
-  const [initialLaunchLocationEntry, setInitialLaunchLocationEntry] = useState(() => ({
-    key: launchTargetKey,
-    location: launchLocationCandidate,
-  }));
-  const launchLocation =
-    initialLaunchLocationEntry.key === launchTargetKey ? initialLaunchLocationEntry.location : null;
+    hasResolvedPendingLaunch,
+    isAuthenticated,
+    canRead: canReadTerminal,
+    canOperate: canOperateTerminal,
+    hasLoadedSessions: knownSessions !== null,
+    location:
+      selectedThread && selectedThreadProject?.workspaceRoot
+        ? {
+            terminalLocation: activeKnownSession?.state.summary ?? null,
+            activeSessionLocation: activeKnownSession?.state.summary ?? null,
+            workspaceRoot: selectedThreadProject.workspaceRoot,
+            threadShellWorktreePath: selectedThread.worktreePath ?? null,
+            threadDetailWorktreePath: selectedThreadDetailWorktreePath,
+          }
+        : null,
+  });
   const terminalAttachInput = useMemo(
     () =>
       selectedThread !== null &&
@@ -547,7 +540,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     routeEnvironmentId === null
       ? null
       : (serverConfigs.get(routeEnvironmentId)?.environment.platform.os ?? null);
-  // The descriptor is authoritative; the label is only a hint until it arrives.
   const hostPlatform = useMemo(
     () =>
       hostPlatformFromOs(hostOs) ??
@@ -572,15 +564,15 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
           ];
 
     return [
+      { kind: "send", key: "up", label: "↑", data: "\u001b[A" },
+      { kind: "send", key: "down", label: "↓", data: "\u001b[B" },
+      { kind: "send", key: "left", label: "←", data: "\u001b[D" },
+      { kind: "send", key: "right", label: "→", data: "\u001b[C" },
       { kind: "send", key: "esc", label: "esc", data: "\u001b" },
       ...modifierActions,
       { kind: "send", key: "tab", label: "tab", data: "\t" },
       { kind: "paste", key: "paste", label: "paste" },
       { kind: "clear", key: "clear", label: "clear" },
-      { kind: "send", key: "up", label: "↑", data: "\u001b[A" },
-      { kind: "send", key: "down", label: "↓", data: "\u001b[B" },
-      { kind: "send", key: "left", label: "←", data: "\u001b[D" },
-      { kind: "send", key: "right", label: "→", data: "\u001b[C" },
       { kind: "send", key: "tilde", label: "~", data: "~" },
       { kind: "send", key: "pipe", label: "|", data: "|" },
       { kind: "send", key: "slash", label: "/", data: "/" },
@@ -664,27 +656,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       },
     });
   }, [cachedRouteGridSize, initialAttachGridEntry.key, launchTargetKey]);
-
-  useEffect(() => {
-    if (
-      initialLaunchLocationEntry.key === launchTargetKey &&
-      initialLaunchLocationEntry.location !== null
-    ) {
-      return;
-    }
-    if (initialLaunchLocationEntry.key === launchTargetKey && launchLocationCandidate === null) {
-      return;
-    }
-    setInitialLaunchLocationEntry({
-      key: launchTargetKey,
-      location: launchLocationCandidate,
-    });
-  }, [
-    initialLaunchLocationEntry.key,
-    initialLaunchLocationEntry.location,
-    launchLocationCandidate,
-    launchTargetKey,
-  ]);
 
   useEffect(() => {
     if (!shouldRedirectToRunningTerminal || !selectedThread || !runningSession) {
@@ -790,7 +761,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     setHasMeasuredSurface(true);
   }, [routeEnvironmentId, routeThreadId, terminalId]);
 
-  /** Resolves true once the pty accepted the write, false if it was skipped or rejected. */
   const writeInput = useCallback(
     async (data: string): Promise<boolean> => {
       if (
@@ -820,7 +790,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   }
   const pasteSession = pasteSessionRef.current;
 
-  // Drop delayed clipboard reads whenever the route or attached pty changes.
   useEffect(() => {
     pasteSession.reset(canOperateTerminal && isRunning);
     return () => {
@@ -838,7 +807,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     });
   }, [pasteSession, terminalId, writeInput]);
 
-  /** Sends a key through the armed toolbar modifier, if any, and disarms it. */
   const writeModifiedInput = useCallback(
     (data: string) => {
       if (pendingModifier === null) {
@@ -943,8 +911,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   }, [navigation, params.environmentId, params.threadId]);
 
   const navigateAwayAfterExit = useCallback(() => {
-    // With other shells still live, fall through to the previous one instead
-    // of dropping the user back on the thread.
     const fallbackTerminalId = previousLiveTerminalId({
       sessions: terminalMenuSessions,
       exitedTerminalId: terminalId,
@@ -963,8 +929,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       navigation.goBack();
       return;
     }
-    // Deep-linked/root mounts have nothing to pop; land on the thread
-    // instead of stranding the user on a dead terminal.
     if (selectedThread) {
       navigation.dispatch(
         StackActions.replace("Thread", {
@@ -1019,7 +983,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
         navigateAwayAfterExit();
         return;
       }
-      // Leave a background terminal screen when it is focused again.
       pendingExitNavigationRef.current = terminalKey;
     },
   });
@@ -1196,7 +1159,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
         onSelectTerminal={handleSelectTerminal}
       />
 
-      <MaterialScreenContent>
+      <ScreenContent>
         <View
           className="flex-1"
           style={{
@@ -1204,8 +1167,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               Platform.OS === "android"
                 ? themeVariables["--color-card-alt"]
                 : terminalTheme.background,
-            // The v5 column extends behind UIKit chrome. Its measured top
-            // reservation is zero when UIKit has already inset the body or moved the bar.
+            // Measured top reservation is zero when UIKit already inset the body or moved the bar.
             paddingTop:
               Platform.OS === "ios" ? (nativeColumnMetrics?.safeArea.top ?? insets.top) : 0,
             paddingBottom:
@@ -1246,6 +1208,12 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 "This connection does not have permission to view terminals."
               }
             />
+          ) : canOperateTerminal && launchLocation === null ? (
+            sessionsError !== null ? (
+              <EmptyState title="Could not load terminals" detail={sessionsError} />
+            ) : (
+              <EmptyState title="Loading terminals" detail="Reading existing terminal sessions." />
+            )
           ) : !canOperateTerminal && !hasTerminalTarget && sessionsPending ? (
             <EmptyState title="Loading terminals" detail="Reading existing terminal sessions." />
           ) : !canOperateTerminal && !hasTerminalTarget && sessionsError !== null ? (
@@ -1282,8 +1250,10 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                   keyboardFocusRequest={keyboardFocusRequest}
                   captureRequest={captureRequest}
                   onCapture={(text) => {
+                    setCaptureRequest(0);
                     if (text.trim()) setCapturedOutput(text);
-                    else Alert.alert("No terminal output", "There is no visible output to attach.");
+                    else
+                      Dialog.alert("No terminal output", "There is no visible output to attach.");
                   }}
                   onInput={handleInput}
                   onResize={handleResize}
@@ -1296,14 +1266,10 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               {Platform.OS === "android" && !keyboardState.isVisible ? (
                 <View className="min-h-14 flex-row items-center gap-2 bg-card-alt px-2">
                   {selectedThread && hasNativeTerminalSurface() ? (
-                    <MaterialButton
-                      label="Attach output"
-                      tone="text"
-                      onPress={() => setCaptureRequest((value) => value + 1)}
-                    />
+                    <Button label="Attach output" tone="text" onPress={requestCapture} />
                   ) : null}
                   <View className="flex-1" />
-                  <MaterialIconButton
+                  <IconButton
                     accessibilityLabel="Show keyboard"
                     disabled={!canOperateTerminal}
                     icon="keyboard"
@@ -1315,7 +1281,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                   accessibilityRole="button"
                   onPress={() => {
                     KeyboardController.dismiss();
-                    setCaptureRequest((value) => value + 1);
+                    requestCapture();
                   }}
                   className="px-4 py-2"
                 >
@@ -1411,7 +1377,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
             </>
           )}
         </View>
-      </MaterialScreenContent>
+      </ScreenContent>
     </>
   );
 }

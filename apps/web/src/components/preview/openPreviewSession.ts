@@ -26,19 +26,15 @@ interface OpenPreviewSessionInput<E> {
   }) => Promise<AtomCommandResult<PreviewSessionSnapshot, E>>;
   threadRef: ScopedThreadRef;
   url?: string;
-  /** Overrides the configured default; automation passes an explicit size. */
   viewport?: PreviewViewportSetting;
-  /** Overrides the configured default profile. */
   profileId?: string;
-  /** Overrides where the tab runs, such as when moving a tab between browsers. */
   runtime?: PreviewRuntime;
 }
 
 export async function openPreviewSession<E>(
   input: OpenPreviewSessionInput<E>,
 ): Promise<AtomCommandResult<PreviewSessionSnapshot, E | BrowserSettingsReadError>> {
-  // Resolved once: a tab opened before client settings hydrate would otherwise
-  // be born at the schema defaults and never corrected.
+  // Wait for settings hydration so new tabs cannot retain uncorrected schema defaults.
   const defaults = await resolveBrowserDefaults().catch(
     (cause: unknown) => new BrowserSettingsReadError({ cause }),
   );

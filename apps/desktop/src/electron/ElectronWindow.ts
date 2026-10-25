@@ -127,11 +127,10 @@ export class ElectronWindow extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronWindow") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
-  // The focus worker loads a native accessibility module. Start it on the first
-  // capture reveal so users who never capture pay nothing at launch.
+  // Lazy-load native accessibility on capture reveal to avoid startup cost for other users.
   let windowsForegroundFocus: ReturnType<typeof startWindowsForegroundFocusThread> | undefined;
   const ensureWindowsForegroundFocus = () => {
     windowsForegroundFocus ??= startWindowsForegroundFocusThread(
@@ -139,7 +138,6 @@ export const make = Effect.gen(function* () {
     );
     return windowsForegroundFocus;
   };
-  // Tracks a capture reveal in flight. Ordinary reveals keep Electron's native path.
   const captureRevealWindows = new Set<number>();
   yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus?.close()));
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
@@ -269,8 +267,6 @@ export const make = Effect.gen(function* () {
             return;
           }
 
-          // Only a capture reveal fights another process for the foreground, which
-          // needs Win32 calls that load native modules. Everything else stays native.
           const captureReveal = platform === "win32" && captureRevealWindows.delete(window.id);
           const shellHostedForeground =
             captureReveal && (await isWindowsShellHostedForeground().catch(() => false));
@@ -327,8 +323,9 @@ export const make = Effect.gen(function* () {
             cause,
           }),
       }).pipe(Effect.orDie),
-    sendAll: (channel, ...args) =>
-      Effect.gen(function* () {
+    sendAll:
+      /* Window broadcasts run for streamed updates; avoid a span per broadcast. */
+      Effect.fnUntraced(function* (channel, ...args) {
         for (const window of yield* listWindows) {
           if (yield* isWindowDestroyed(window)) {
             continue;

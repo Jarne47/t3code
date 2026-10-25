@@ -51,14 +51,7 @@ export const releaseClaimedAttachments = Effect.fn("AttachmentClaims.releaseClai
   },
 );
 
-/**
- * Claims pending uploads into the target thread's attachment store before the
- * command enters the orchestrator: verifies the staged file, copies it under a
- * thread-scoped id, and rewrites the attachment ref. A copy, not a move — the
- * pending file stays behind as the retry source for a failed bootstrap, and
- * the periodic pending sweep reclaims it later. Already-claimed attachments
- * pass through untouched.
- */
+/** Copies preserve the pending retry source after failed bootstrap; the pending sweep reclaims it. */
 export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingAttachments")(
   function* (input: {
     readonly threadId: string;
@@ -124,11 +117,8 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
               message: `Attachment '${attachment.name}' cannot be sent: attachment type does not match the upload.`,
             });
           }
-          // A copy, not a hard link: an agent editing the delivered file in
-          // place must not mutate the retry source. fs.copyFile cannot be
-          // cancelled, so the copy and its rollback registration stay in one
-          // uninterruptible region: an interrupt landing mid-copy still waits
-          // for the write to settle and records the path before cleanup runs.
+          // Copies isolate edits from the retry source. Keep the uncancellable copy and rollback registration
+          // uninterruptible so cleanup always sees completed writes.
           yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
             Effect.mapError(
               (cause) =>

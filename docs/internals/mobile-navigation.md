@@ -23,6 +23,15 @@ preserves behavior that is easy to break when changing native headers:
 - A horizontal ScrollView at its leading edge must yield to the full-screen back
   gesture. Upstream gives every horizontal ScrollView priority, so swiping back
   on a code block or table can only bounce its content.
+- UIKit draws the header's scroll-edge blur inside the scroll view, and workspace
+  columns pad their content away from the iPhone Duo's vertical bar. Register a
+  header scroll view only through
+  [`NativeScrollViewMarker`](../../apps/mobile/src/native/NativeScrollViewMarker.tsx)
+  or `NativeScrollView`: their native wrapper widens the scroll view to the right
+  under that bar, so the blur reaches it while the content keeps its React Native
+  frame. It never bleeds left: that would need a horizontal content offset, which
+  React Native rewrites on its own layout passes. Lint rejects `ScrollViewMarker`
+  imported anywhere else.
 
 The patch adds native header props that require code generation and a new binary.
 Patch rebuild guidance lives in the

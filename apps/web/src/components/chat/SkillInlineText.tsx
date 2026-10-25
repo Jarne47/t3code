@@ -5,7 +5,7 @@ import { matchInlineSkills, type InlineSkill } from "@t3tools/shared/inlineSkill
 import { SKILL_CHIP_ICON_SVG } from "../composerInlineChip";
 import { ContextChip, ContextChipLabel } from "../ContextChip";
 
-export function SkillInlineText(props: { text: string; skills: ReadonlyArray<InlineSkill> }) {
+function SkillInlineText(props: { text: string; skills: ReadonlyArray<InlineSkill> }) {
   const nodes: ReactNode[] = [];
   let cursor = 0;
 
@@ -37,8 +37,7 @@ export function renderSkillInlineMarkdownChildren(
     if (!isValidElement<{ children?: ReactNode; node?: { tagName?: string } }>(child)) {
       return child;
     }
-    // Custom react-markdown components replace the intrinsic type, so also
-    // check the hast node they carry.
+    // Custom markdown components replace intrinsic types; check their hast tags.
     const markdownTagName = typeof child.type === "string" ? child.type : child.props.node?.tagName;
     if (markdownTagName === "code" || markdownTagName === "a") {
       return child;
@@ -63,7 +62,6 @@ function SkillChip(props: { skill: InlineSkill; rawText: string }) {
   );
 }
 
-/** The skill glyph; the surrounding chip sizes its svg. */
 export function SkillChipIcon() {
   return (
     <span

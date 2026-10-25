@@ -1,12 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type KeyboardEvent,
-} from "react";
+import { memo, useEffect, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { Image as ImageGlyph, Text as TextGlyph } from "lucide";
 import { Button } from "../ui/button";
@@ -28,6 +20,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ZoomableImage, type ZoomableImageHandle } from "./ZoomableImage";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import { cn } from "~/lib/utils";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { expandedImageKey } from "./ExpandedImagePreview";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -95,8 +91,6 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  // The offset accumulates without bound, so wrap it into range in both directions:
-  // JavaScript `%` keeps the sign of the dividend, and a negative index blanks the dialog.
   const imageCount = preview.images.length;
   const index =
     imageCount > 0 ? (((preview.index + imageOffset) % imageCount) + imageCount) % imageCount : 0;
@@ -117,13 +111,11 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
       }
     : source;
 
-  const navigateImage = useCallback((direction: -1 | 1) => {
+  const navigateImage = (direction: -1 | 1) => {
     setImageOffset((current) => current + direction);
-  }, []);
+  };
 
-  // The element that opened the preview gets focus back on close. Without
-  // this a close button click leaves focus on the unmounted dialog, and the
-  // composer that owned the opener reads that as a blur and rests.
+  // Restore opener focus to prevent composer collapse.
   const openerRef = useRef<Element | null>(null);
   useEffect(() => {
     openerRef.current = document.activeElement;
@@ -197,8 +189,8 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         className={cn(
           "items-center justify-center",
           fullScreen
-            ? "[--media-width:calc(100vw-32px)] [--media-height:calc(100dvh-96px)]"
-            : "row-start-1 h-full max-h-[92vh] w-[92vw] max-w-[92vw] overflow-visible [--media-width:92vw] [--media-height:min(86vh,calc(100vh-160px))] sm:[--media-width:calc(92vw-96px)]",
+            ? "[--media-width:calc(100vw-32px)] [--media-height:calc(100dvh-var(--native-titlebar-height,0px)-96px)]"
+            : "row-start-1 h-full max-h-[92vh] w-[92vw] max-w-[92vw] overflow-visible [--media-width:92vw] [--media-height:min(calc((100vh-var(--native-titlebar-height,0px))*0.86),calc(100vh-var(--native-titlebar-height,0px)-160px))] sm:[--media-width:calc(92vw-96px)]",
         )}
         onKeyDown={onKeyDown}
         initialFocus={closeButtonRef}
@@ -208,7 +200,6 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         }}
       >
         <DialogTitle className="sr-only">Expanded {mediaLabel} preview</DialogTitle>
-        {/* The stage keeps a fixed size, so the close button stays put whatever the media or caption. */}
         <Button
           type="button"
           ref={closeButtonRef}
@@ -259,6 +250,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
                 src={item.src}
                 name={item.name}
                 fullScreen={fullScreen}
+                mimeType={item.mimeType}
                 onError={() => setFailedImageSrc(item.src)}
               />
             )}
@@ -312,3 +304,43 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     </Dialog>
   );
 });
+
+// Keep preview state outside ChatView to isolate dialog renders.
+const expandedImagePreviewAtom = Atom.make<{
+  readonly threadKey: string;
+  readonly preview: ExpandedImagePreview;
+} | null>(null).pipe(Atom.keepAlive, Atom.withLabel("chat:expanded-image-preview"));
+
+export function openExpandedImagePreview(threadKey: string, preview: ExpandedImagePreview): void {
+  appAtomRegistry.set(expandedImagePreviewAtom, { threadKey, preview });
+}
+
+function closeExpandedImagePreview(): void {
+  appAtomRegistry.set(expandedImagePreviewAtom, null);
+}
+
+function closeExpandedImagePreviewFor(threadKey: string): void {
+  if (appAtomRegistry.get(expandedImagePreviewAtom)?.threadKey === threadKey) {
+    closeExpandedImagePreview();
+  }
+}
+
+export function ExpandedImageDialogHost({ threadKey }: { readonly threadKey: string }) {
+  const state = useAtomValue(expandedImagePreviewAtom);
+  const preview = state?.threadKey === threadKey ? state.preview : null;
+  const item = preview?.images[preview.index];
+  const ownedSrc = item?.ownsSrc === true ? item.src : null;
+  useEffect(() => {
+    if (ownedSrc === null) return;
+    return () => URL.revokeObjectURL(ownedSrc);
+  }, [ownedSrc]);
+  useEffect(() => () => closeExpandedImagePreviewFor(threadKey), [threadKey]);
+  if (preview === null) return null;
+  return (
+    <ExpandedImageDialog
+      key={expandedImageKey(preview)}
+      preview={preview}
+      onClose={closeExpandedImagePreview}
+    />
+  );
+}

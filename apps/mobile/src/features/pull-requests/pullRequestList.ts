@@ -1,8 +1,11 @@
-import type {
-  EnvironmentId,
-  PullRequestListEntry,
-  PullRequestListInput,
-  PullRequestListResult,
+import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
+import {
+  ProjectId,
+  resolvePullRequestAuthorFilter,
+  type EnvironmentId,
+  type PullRequestListEntry,
+  type PullRequestListInput,
+  type PullRequestListResult,
 } from "@t3tools/contracts";
 import type { PullRequestListControls } from "../../persistence/mobile-preferences";
 
@@ -14,6 +17,20 @@ export const DEFAULT_PR_LIST_CONTROLS: PullRequestListControls = {
   filters: {},
   sort: "updated",
 };
+
+export function withoutScratchProjectScope(
+  controls: PullRequestListControls,
+  projects: readonly { id: string; environmentId: string; isScratch?: true }[],
+): PullRequestListControls {
+  return projects.some(
+    (project) =>
+      project.isScratch &&
+      project.id === controls.projectId &&
+      project.environmentId === controls.projectEnvironmentId,
+  )
+    ? { ...controls, projectId: undefined, projectEnvironmentId: undefined }
+    : controls;
+}
 
 export function pullRequestListKey(
   item: Pick<PullRequestListEntry, "host" | "repository" | "number">,
@@ -28,7 +45,6 @@ export type EnvironmentPullRequestListEntry = PullRequestListEntry & {
 export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry) =>
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
 
-/** Provider refreshes and diff-count batches recreate entries; unchanged rows can stay mounted. */
 export function pullRequestListRowsAreEqual(
   previous: EnvironmentPullRequestListEntry,
   next: EnvironmentPullRequestListEntry,
@@ -44,6 +60,8 @@ export function pullRequestListRowsAreEqual(
       previous.url === next.url &&
       previous.state === next.state &&
       previous.isDraft === next.isDraft &&
+      previous.mergeability === next.mergeability &&
+      previous.baseBranch === next.baseBranch &&
       previous.updatedAt === next.updatedAt &&
       previous.additions === next.additions &&
       previous.deletions === next.deletions &&
@@ -62,7 +80,6 @@ export function pullRequestListRowsAreEqual(
   );
 }
 
-/** Keep cursors and viewer identities with the environment that issued them. */
 export function mergeEnvironmentPullRequestPages(
   sources: readonly { environmentId: EnvironmentId; pages: PullRequestListPages }[],
 ) {
@@ -126,6 +143,21 @@ export function pullRequestListHead(
       };
 }
 
+export function pullRequestListInput(
+  controls: PullRequestListControls,
+  query: string,
+): PullRequestListInput {
+  const parsed = parsePullRequestQuery(query);
+  return {
+    state: controls.state,
+    involvement: controls.involvement,
+    filters: { ...controls.filters, ...parsed.filters },
+    limit: PR_LIST_PAGE_SIZE,
+    ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
+    ...(parsed.text ? { query: parsed.text } : {}),
+  };
+}
+
 export function nextPullRequestListInput(
   pages: PullRequestListPages,
   input: PullRequestListInput,
@@ -152,6 +184,37 @@ export function appendPullRequestListPage(
   };
 }
 
+/**
+ * A filter picker's rows: what is picked stays in view, then the loaded rows' values that match,
+ * then the host's answers, each once. The host matched its own way (an author's display name, say),
+ * so its answers are not narrowed again here.
+ */
+const FILTER_CHOICE_LIMIT = 100;
+
+export function pullRequestFilterChoices(input: {
+  readonly selected: readonly string[];
+  readonly suggestions: readonly string[];
+  readonly hosted: readonly string[];
+  readonly query: string;
+}): readonly string[] {
+  const needle = input.query.trim().toLowerCase();
+  const seen = new Set<string>();
+  const rows: string[] = [];
+  const add = (value: string) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(value);
+  };
+  const loaded = input.suggestions.filter((value) => value.toLowerCase().includes(needle));
+  for (const value of input.selected) add(value);
+  // Loaded matches alone could fill the list, so the host's answers get room after the first half.
+  for (const value of loaded.slice(0, FILTER_CHOICE_LIMIT / 2)) add(value);
+  for (const value of input.hosted) add(value);
+  for (const value of loaded.slice(FILTER_CHOICE_LIMIT / 2)) add(value);
+  return rows.slice(0, FILTER_CHOICE_LIMIT);
+}
+
 export function pullRequestListFacets(entries: readonly PullRequestListEntry[]) {
   return {
     authors: [
@@ -160,7 +223,21 @@ export function pullRequestListFacets(entries: readonly PullRequestListEntry[]) 
     labels: [...new Set(entries.flatMap((entry) => entry.labels.map((label) => label.name)))].sort(
       (a, b) => a.localeCompare(b),
     ),
+    labelColors: pullRequestLabelColors(entries.flatMap((entry) => entry.labels)),
   };
+}
+
+/** Each label's dot color by lowercased name; the first usable color a name carries wins. */
+export function pullRequestLabelColors(
+  labels: readonly { readonly name: string; readonly color: string | null }[],
+): Readonly<Record<string, string>> {
+  const colors: Record<string, string> = {};
+  for (const label of labels) {
+    const key = label.name.toLowerCase();
+    const color = pullRequestLabelColor(label.color);
+    if (color && !(key in colors)) colors[key] = color;
+  }
+  return colors;
 }
 
 export function filterPullRequestList<
@@ -174,8 +251,9 @@ export function filterPullRequestList<
   connectedEnvironmentIds?: ReadonlySet<string>,
 ) {
   const normalize = (value: string) => value.toLowerCase();
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const { filters } = controls;
+  const parsed = parsePullRequestQuery(query);
+  const words = parsed.text.toLowerCase().split(/\s+/).filter(Boolean);
+  const filters = { ...controls.filters, ...parsed.filters };
   const filtered = entries.filter((entry) => {
     if (controls.state !== "all" && entry.state !== controls.state) return false;
     if (controls.projectId && entry.projectId !== controls.projectId) return false;
@@ -192,10 +270,9 @@ export function filterPullRequestList<
     if ((filters.draft === "only" && !entry.isDraft) || (filters.draft === "hide" && entry.isDraft))
       return false;
     if (filters.author) {
-      const author = filters.author === "me" ? viewer : filters.author;
-      if (!author || normalize(entry.author?.login ?? "") !== normalize(author)) return false;
+      const author = resolvePullRequestAuthorFilter(filters.author, viewer);
+      if (normalize(entry.author?.login ?? "") !== normalize(author)) return false;
     }
-    // Hosts without a review rollup still perform their own review filtering.
     if (filters.review && entry.reviewDecision && entry.reviewDecision !== filters.review)
       return false;
     if (filters.review === "none" && entry.reviewDecision) return false;
@@ -211,8 +288,6 @@ export function filterPullRequestList<
     }
     return true;
   });
-  // The same repository can be available on multiple machines. Pick its first matching source,
-  // unless that machine is unreachable and another one can answer: its rows may only be cached.
   const reachable = (entry: Entry) =>
     !connectedEnvironmentIds ||
     (entry.environmentId !== undefined && connectedEnvironmentIds.has(entry.environmentId));

@@ -26,8 +26,7 @@ interface ThreadPrSnapshot {
   readonly presentation: ThreadPrPresentation;
 }
 
-// One bounded cache survives row virtualization without retaining one live
-// atom for every thread or pull request ever seen.
+// Bound the cache across row virtualization instead of retaining live atoms for every past thread or PR.
 const threadPrSnapshotsAtom = Atom.make<ReadonlyMap<string, ThreadPrSnapshot>>(new Map()).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:thread-pr-snapshots"),
@@ -39,10 +38,6 @@ export {
   type ThreadPrPresentation,
 } from "./thread-pr-presentation";
 
-/**
- * Linked PRs use server snapshots. Branch fallback and legacy references share
- * a live summary request across visible rows in the same environment.
- */
 export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentation | null {
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
@@ -62,7 +57,6 @@ export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentatio
   );
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const snapshotIdentity = JSON.stringify(pullRequestRef);
-  // Select this row's entry so writes for other rows do not re-render it.
   const snapshotEntry = useAtomValue(
     threadPrSnapshotsAtom,
     useCallback(

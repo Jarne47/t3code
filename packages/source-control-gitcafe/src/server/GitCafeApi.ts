@@ -15,10 +15,6 @@ import * as GitCafeHosts from "./gitCafeHosts.ts";
 const NO_REDIRECT: RequestInit = { redirect: "manual" };
 const TIMEOUT = Duration.seconds(30);
 
-/**
- * Why a request failed, as far as a caller needs to act on it: a missing CLI or refused token
- * disables the provider, a limit pauses the host, and the rest belong to the one request.
- */
 export const GitCafeApiFailure = Schema.Literals([
   "missing-tool",
   "unauthenticated",
@@ -30,7 +26,6 @@ export const GitCafeApiFailure = Schema.Literals([
 export class GitCafeApiError extends Schema.TaggedError<GitCafeApiError>()("GitCafeApiError", {
   host: Schema.String,
   operation: Schema.String,
-  /** GitCafe's HTTP status; null when no answer arrived. */
   status: Schema.NullOr(Schema.Int),
   reason: GitCafeApiFailure,
   detail: Schema.String,
@@ -45,21 +40,17 @@ export interface GitCafeApiRequest {
   readonly host: string;
   readonly operation: string;
   readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  /** Below `/api`, query string included, e.g. `/repos/owner/repo/pulls/7`. */
   readonly path: string;
   readonly body?: unknown;
 }
 
-/** GitCafe's REST API on its own hosts, authenticated with the `GitCafeCredentials` token. */
 export class GitCafeApi extends Context.Service<
   GitCafeApi,
   {
-    /** The body of a successful answer. */
     readonly request: (input: GitCafeApiRequest) => Effect.Effect<string, GitCafeApiError>;
   }
 >()("@t3tools/source-control-gitcafe/server/GitCafeApi") {}
 
-/** GitCafe's RFC 7807 error body, e.g. `{"type":"https://cafe.sh/errors/not-found",...}`. */
 const decodeProblem = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -94,7 +85,7 @@ const credentialFailure = (
       ? "unauthenticated"
       : "failed";
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const credentials = yield* GitCafeCredentials.GitCafeCredentials;
@@ -111,7 +102,7 @@ export const make = Effect.gen(function* () {
         detail: fields.detail,
         ...(fields.cause === undefined ? {} : { cause: fields.cause }),
       });
-    // The host comes from a remote URL, so a token never leaves for one GitCafe does not own.
+    // Remote URLs must not send tokens outside GitCafe's hosts.
     const host = GitCafeHosts.gitCafeHost(input.host);
     if (host === null)
       return yield* fail({
@@ -143,10 +134,9 @@ export const make = Effect.gen(function* () {
           input.body === undefined ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body)),
         )
         .pipe(
-          // The client's own span would record the query string, which can carry branch names.
+          // Client spans expose query strings containing branch names.
           Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-          // fetch would follow a redirect itself and keep the bearer token on a same-origin hop;
-          // GitCafe's API never redirects a request it serves, so a 3xx is answered as a failure.
+          // GitCafe does not redirect; reject 3xx to protect bearer credentials.
           Effect.provideService(FetchHttpClient.RequestInit, NO_REDIRECT),
         );
       return { status: response.status, text: yield* response.text };
@@ -164,7 +154,6 @@ export const make = Effect.gen(function* () {
     return yield* fail({
       status,
       reason: reasonForStatus(status),
-      // GitCafe's own explanation is what the user acts on; it is kept short and single-line.
       detail:
         boundedProblemText(problem?.detail ?? problem?.title) ?? `GitCafe answered HTTP ${status}.`,
     });

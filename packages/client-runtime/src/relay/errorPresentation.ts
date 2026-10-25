@@ -41,10 +41,13 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       // "Not authorized" covers non-auth causes too; surface the reason so a
       // missing link does not read as a credential problem.
       if (error.reason === "environment_link_not_found") {
-        return "Relay has no active link for this environment. The environment server may not have re-established its link yet.";
+        return "Relay has no active link for this environment. If it was deregistered from T3 Connect, link it again on that machine.";
       }
       if (error.reason === "managed_endpoint_allocation_not_ready") {
         return "The environment's T3 Connect tunnel is still being set up.";
+      }
+      if (error.reason === "endpoint_provider_not_managed") {
+        return "This environment is linked only to publish agent activity, so it cannot accept connections. On that computer, open Settings > Connections and turn T3 Connect on.";
       }
       return error.reason
         ? `Relay rejected the environment connection request (${error.reason}).`
@@ -56,7 +59,9 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
     case "RelayEnvironmentLinkFailedError":
       return `Relay could not link the environment (${error.reason}).`;
     case "RelayEnvironmentLinkUnavailableError":
-      return `Relay cannot provision the managed endpoint (${error.reason}).`;
+      return `Relay cannot provision the managed endpoint (${error.reason}).${
+        error.provisioningStage ? ` Failed stage: ${error.provisioningStage}.` : ""
+      }`;
     case "RelayEnvironmentLinkLimitExceededError":
       return `Relay refused the link: this account already has its maximum of ${error.maxTunnels} managed tunnels. Unlink an environment to free one up.`;
     case "RelayAgentActivityPublishProofExpiredError":
@@ -73,11 +78,6 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
 export const RELAY_GATEWAY_TIMEOUT_MESSAGE =
   "Relay timed out before it finished the request (HTTP 504). Try again in a few minutes. If it keeps failing, copy the trace ID when you report it.";
 
-/**
- * User-facing detail for a failed relay request: the relay's typed error, or
- * the HTTP status when the relay sent a response the contract does not declare.
- * Null when the request got no response.
- */
 export function relayRequestFailureDetail(error: {
   readonly relayError?: RelayProtectedError | undefined;
   readonly status?: number | undefined;
@@ -88,13 +88,9 @@ export function relayRequestFailureDetail(error: {
   return null;
 }
 
-// A host with a current build gets a new tunnel on its own within minutes of
-// coming back, which clears this reason. While it is still reported, the host
-// is either still off or running a build too old to do that.
-export const RELAY_TUNNEL_RELEASED_MESSAGE =
+const RELAY_TUNNEL_RELEASED_MESSAGE =
   "Offline for a while, so its T3 Connect tunnel was removed. Start T3 Code on that computer and update it to the latest version to reconnect.";
 
-/** User-facing text for an offline status, or null when the relay gave no known reason. */
 export function relayOfflineReasonMessage(
   status: Pick<RelayEnvironmentStatusResponse, "offlineReason">,
 ): string | null {

@@ -3,8 +3,10 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
+  CircleDotDashedIcon,
   MessageCircleQuestionIcon,
   ShieldQuestionIcon,
+  UserRoundIcon,
 } from "lucide-react";
 import type { SidebarV2TopStatusKind } from "../Sidebar.logic";
 
@@ -21,6 +23,8 @@ export function SidebarV2StatusIcon({
       return <CircleDashedIcon aria-hidden className={className} />;
     case "input":
       return <MessageCircleQuestionIcon aria-hidden className={className} />;
+    case "request":
+      return <UserRoundIcon aria-hidden className={className} />;
     case "approval":
       return <ShieldQuestionIcon aria-hidden className={className} />;
     case "failed":
@@ -31,6 +35,6 @@ export function SidebarV2StatusIcon({
     case "done":
       return <CircleCheckIcon aria-hidden className={className} />;
     case "waiting":
-      return null;
+      return <CircleDotDashedIcon aria-hidden className={className} />;
   }
 }

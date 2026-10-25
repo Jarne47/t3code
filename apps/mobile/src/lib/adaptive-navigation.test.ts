@@ -1,31 +1,20 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  isBaseThreadRoute,
-  resolveFileSelectionNavigationAction,
   resolveThreadSelectionNavigationAction,
   resolveThreadSelectionOverlayState,
 } from "./adaptive-navigation";
 
-describe("isBaseThreadRoute", () => {
-  it("recognizes only the thread detail route", () => {
-    expect(isBaseThreadRoute("/threads/environment/thread")).toBe(true);
-    expect(isBaseThreadRoute("/threads/environment/thread/")).toBe(true);
-    expect(isBaseThreadRoute("/threads/environment/thread/files")).toBe(false);
-    expect(isBaseThreadRoute("/threads/environment/thread/review")).toBe(false);
-  });
-});
-
 describe("resolveThreadSelectionNavigationAction", () => {
-  it("updates params when a persistent sidebar selects a peer thread", () => {
+  it("retains the draft screen despite its query-shaped path", () => {
     expect(
       resolveThreadSelectionNavigationAction({
         usesSplitView: true,
-        pathname: "/threads/environment/thread",
+        pathname: "/threads?draft=local",
+        workspaceRouteName: "Thread",
       }),
     ).toBe("set-params");
   });
-
   it("replaces nested thread content when a persistent sidebar selects a peer", () => {
     expect(
       resolveThreadSelectionNavigationAction({
@@ -43,29 +32,6 @@ describe("resolveThreadSelectionNavigationAction", () => {
       }),
     ).toBe("push");
   });
-
-  it("pushes compact list selections onto the native stack", () => {
-    expect(
-      resolveThreadSelectionNavigationAction({
-        usesSplitView: false,
-        pathname: "/threads/environment/thread",
-      }),
-    ).toBe("push");
-  });
-});
-
-describe("resolveFileSelectionNavigationAction", () => {
-  it("replaces the wide file browser with the selected preview", () => {
-    expect(resolveFileSelectionNavigationAction({ hasPersistentFileInspector: true })).toBe(
-      "replace",
-    );
-  });
-
-  it("pushes a preview above the compact file browser", () => {
-    expect(resolveFileSelectionNavigationAction({ hasPersistentFileInspector: false })).toBe(
-      "push",
-    );
-  });
 });
 
 describe("resolveThreadSelectionOverlayState", () => {
@@ -73,7 +39,7 @@ describe("resolveThreadSelectionOverlayState", () => {
     key: "workspace",
     type: "stack",
     stale: false as const,
-    routeNames: ["Home", "Thread", "ThreadFiles", "SettingsSheet", "SettingsLegal"],
+    routeNames: ["Home", "Thread", "ThreadFiles", "Connections", "SettingsLegal"],
   };
   const home = { key: "home", name: "Home" };
   const thread = {
@@ -82,7 +48,7 @@ describe("resolveThreadSelectionOverlayState", () => {
     params: { environmentId: "environment", threadId: "old-thread" },
   };
   const files = { key: "files", name: "ThreadFiles", params: thread.params };
-  const settings = { key: "settings", name: "SettingsSheet" };
+  const settings = { key: "settings", name: "Connections" };
   const params = { environmentId: "environment", threadId: "new-thread" };
 
   it("replaces the underlying file route and dismisses every overlay above it", () => {
@@ -124,15 +90,24 @@ describe("resolveThreadSelectionOverlayState", () => {
       ).toEqual({ ...stack, index: 1, routes: [route, { name: "Thread", params }] });
     },
   );
+});
 
-  it("leaves ordinary thread selection alone when no overlay is present", () => {
-    expect(
-      resolveThreadSelectionOverlayState({
-        state: { ...stack, index: 2, routes: [home, thread, files] },
-        workspaceRouteKey: files.key,
-        action: "replace",
-        params,
-      }),
-    ).toBeNull();
+it("replacing a draft underneath an overlay removes its draft identity", () => {
+  const result = resolveThreadSelectionOverlayState({
+    state: {
+      key: "root",
+      type: "stack",
+      stale: false,
+      routeNames: ["Thread", "Connections"],
+      index: 1,
+      routes: [
+        { key: "draft", name: "Thread", params: { draft: { draftId: "old" } } },
+        { key: "settings", name: "Connections" },
+      ],
+    },
+    workspaceRouteKey: "draft",
+    action: "set-params",
+    params: { environmentId: "env", threadId: "live" },
   });
+  expect(result?.routes[0]?.params).toEqual({ environmentId: "env", threadId: "live" });
 });

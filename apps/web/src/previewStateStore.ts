@@ -1,10 +1,3 @@
-/**
- * Per-thread preview UI state.
- *
- * Each thread owns an independent atom. Most consumers read exactly one
- * thread; the desktop browser host uses the aggregate session atom because it
- * is the one place that must enumerate every live preview tab.
- */
 import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -43,11 +36,8 @@ export interface ThreadPreviewState {
   desktopOverlay: DesktopPreviewOverlay | null;
   desktopByTabId: Record<string, DesktopPreviewOverlay>;
   recentlySeenUrls: string[];
-  /** Whether the first authoritative tab list has arrived. */
   listLoaded: boolean;
-  /** Server process currently authoritative for revision ordering. */
   serverEpoch: string | null;
-  /** Latest ordered server revision applied from a list response or event. */
   serverRevision: number;
 }
 
@@ -75,8 +65,7 @@ export const previewStateAtom = Atom.family((threadKey: string) =>
   ),
 );
 
-// Only the Electron browser host needs a cross-thread view. Keep that index
-// separate so thread-local readers never subscribe to unrelated previews.
+// Only Electron needs this cross-thread index; separate it to avoid unrelated preview subscriptions.
 interface ActivePreviewThreadIndex {
   readonly keys: ReadonlySet<string>;
 }
@@ -275,12 +264,7 @@ export function applyPreviewServerSnapshot(
   });
 }
 
-/**
- * Merge a server mutation without changing which tab the user is viewing.
- *
- * Commands such as resize can target background tabs. Their response is
- * authoritative for that tab, but it is not a request to focus the tab.
- */
+/** Updates background tabs without focusing them. */
 export function updatePreviewServerSnapshot(
   ref: ScopedThreadRef,
   snapshot: PreviewSessionSnapshot,
@@ -304,11 +288,6 @@ export function updatePreviewServerSnapshot(
   });
 }
 
-/**
- * Replace the local session index from an authoritative preview.list result.
- * Missing tabs are removed while the current active tab is preserved whenever
- * it still exists in the server result.
- */
 export function reconcilePreviewServerSessions(
   ref: ScopedThreadRef,
   result: PreviewListResult,
@@ -346,6 +325,21 @@ export function reconcilePreviewServerSessions(
         snapshots.some((snapshot) => snapshot.tabId === tabId),
       ),
     );
+    const desktopOverlay = activeTabId ? (desktopByTabId[activeTabId] ?? null) : null;
+    if (
+      sameServer &&
+      current.listLoaded &&
+      current.serverRevision === result.revision &&
+      current.activeTabId === activeTabId &&
+      current.snapshot === snapshot &&
+      current.desktopOverlay === desktopOverlay &&
+      current.recentlySeenUrls === recentlySeenUrls &&
+      haveSameValues(current.sessions, sessions) &&
+      haveSameValues(current.desktopByTabId, desktopByTabId) &&
+      current.suppressedTabIds.size === suppressedTabIds.size
+    ) {
+      return current;
+    }
     return {
       ...current,
       sessions,
@@ -353,13 +347,18 @@ export function reconcilePreviewServerSessions(
       activeTabId,
       snapshot,
       desktopByTabId,
-      desktopOverlay: activeTabId ? (desktopByTabId[activeTabId] ?? null) : null,
+      desktopOverlay,
       recentlySeenUrls,
       listLoaded: true,
       serverEpoch: result.serverEpoch,
       serverRevision: result.revision,
     };
   });
+}
+
+function haveSameValues<T>(left: Record<string, T>, right: Record<string, T>): boolean {
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
 }
 
 function isPreviewStateEqual(
@@ -458,11 +457,7 @@ export function setActivePreviewTab(ref: ScopedThreadRef, tabId: string): void {
   });
 }
 
-/**
- * Runs `action` once the thread's preview state has the tab, which a popup's
- * `opened` event may deliver after the stream that announced it. Gives up
- * after `timeoutMs`. Returns a cancel function.
- */
+/** Runs once the tab is known; popup opened events can arrive after their announcing stream. */
 export function whenPreviewTabKnown(
   ref: ScopedThreadRef,
   tabId: string,
@@ -500,10 +495,7 @@ export function isPreviewSupportedInRuntime(): boolean {
   return Boolean(window.desktopBridge?.preview);
 }
 
-/**
- * Forgets a deleted thread's previews. The server closes their sessions too,
- * but the desktop host keeps a page for every session held here.
- */
+/** Releases desktop-host pages as well as local session state. */
 export function clearThreadPreviewState(ref: ScopedThreadRef): void {
   updateThreadPreviewState(ref, (current) =>
     Object.keys(current.sessions).length === 0 ? current : EMPTY_THREAD_PREVIEW_STATE,

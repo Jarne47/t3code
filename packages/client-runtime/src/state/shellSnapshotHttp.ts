@@ -19,20 +19,11 @@ import {
   type DeferredShellSnapshot,
 } from "./shellPullRequests.ts";
 
-// Long enough for a slow but alive server to finish. On timeout the socket asks
-// the same server for the same full snapshot, so a short deadline only throws
-// the first build away. The socket fallback is for setups where /api fails but
-// /ws works, such as a proxy that blocks /api. A dead server is caught by the
-// socket ping, which drops the session and interrupts this load. The cached
-// shell renders while this runs.
+// On timeout the socket asks the same server for the same full snapshot, so a
+// short deadline only throws the first build away. The socket fallback is for
+// setups where /api fails but /ws works, such as a proxy that blocks /api.
 const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 20_000;
 
-/**
- * Load the environment shell snapshot (projects + thread shells) over HTTP
- * instead of as the WebSocket subscription's first frame. The response is
- * gzip-compressible by the transport and keeps the (potentially large) list off
- * the socket.
- */
 export const fetchEnvironmentShellSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentShellSnapshot",
 )(function* (input: {
@@ -42,20 +33,22 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
     RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]
   >;
   readonly timeoutMs?: number;
+  readonly omitIdleSubagents?: boolean;
 }) {
+  const endpoint = {
+    query: input.omitIdleSubagents === true ? { omitIdleSubagents: "1" } : {},
+  };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "orchestration",
     method: "GET",
-    url: (urls) => urls.shellSnapshot(),
+    url: (urls) => urls.shellSnapshot(endpoint),
     timeoutMs: input.timeoutMs ?? DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS,
-    // The body is decoded here so each thread's pull request links can decode after its
-    // rows. Every declared error is an `EnvironmentHttpCommonError`, so decoding one keeps
-    // the error the credential retry checks for.
     request: ({ client, headers }) =>
       client
         .shellSnapshot({
           headers: withOrchestrationProtocolHeader(headers),
+          ...endpoint,
           responseMode: "response-only",
         })
         .pipe(Effect.flatMap(decodeShellSnapshotResponse)),
@@ -75,7 +68,6 @@ const decodeShellSnapshotResponse = (
   if (response.status === 200) {
     return response.json.pipe(Effect.flatMap(decodeShellSnapshotDeferringPullRequests));
   }
-  // A body that is not a declared error keeps its status, as the generated decoder reported.
   const statusError = new HttpClientError.HttpClientError({
     reason: new HttpClientError.StatusCodeError({ request: response.request, response }),
   });
@@ -88,17 +80,12 @@ const decodeShellSnapshotResponse = (
   );
 };
 
-/**
- * Loads the environment shell snapshot over HTTP, returning `Option.none()` when
- * it cannot be loaded (so the caller falls back to the socket-embedded snapshot).
- * Decouples the shell state machine from the underlying HTTP + DPoP details and
- * keeps them out of test contexts.
- */
 export class ShellSnapshotLoader extends Context.Service<
   ShellSnapshotLoader,
   {
     readonly load: (
       prepared: PreparedConnection,
+      options?: { readonly omitIdleSubagents?: boolean },
     ) => Effect.Effect<Option.Option<DeferredShellSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/shellSnapshotHttp/ShellSnapshotLoader") {}
@@ -114,8 +101,13 @@ export const layer: Layer.Layer<ShellSnapshotLoader, never, HttpClient.HttpClien
       RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
     );
     return ShellSnapshotLoader.of({
-      load: (prepared: PreparedConnection) =>
-        fetchEnvironmentShellSnapshot({ prepared, signer, remoteAuthorization }).pipe(
+      load: (prepared, options) =>
+        fetchEnvironmentShellSnapshot({
+          prepared,
+          signer,
+          remoteAuthorization,
+          ...(options?.omitIdleSubagents === true ? { omitIdleSubagents: true } : {}),
+        }).pipe(
           Effect.map(Option.some<DeferredShellSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.catchCause((cause) =>

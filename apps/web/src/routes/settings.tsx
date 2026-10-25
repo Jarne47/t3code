@@ -86,12 +86,9 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
       </SettingsScopeNotice>
     );
   }
-  // Device-local pages ignore the scope entirely; the project page follows
-  // remembered members while a grouping change replaces its URL key.
   if (SETTINGS_DEVICE_ONLY_PATHS.has(pathname) || pathname === "/settings/projects") {
     return children;
   }
-  // Keep the scope sentence on screen so the selection can be changed back.
   if (scope.kind === "unavailable")
     return (
       <SettingsPageContainer>
@@ -156,8 +153,7 @@ function SettingsRouteLayout() {
       search={rawSearch}
       singleEnvironment={pathname === "/settings/providers"}
       onChange={(next) => {
-        // Send every axis so the retain middleware sees an explicit target
-        // even when the choice is "all", which is the absence of a key.
+        // Send every axis so retain middleware recognizes "all" as an explicit target.
         void navigate({
           to: pathname,
           search: () => ({

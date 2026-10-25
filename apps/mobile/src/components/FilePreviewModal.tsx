@@ -1,3 +1,4 @@
+import * as Dialog from "./ui/Dialog";
 import { useNavigation } from "@react-navigation/native";
 import {
   useCallback,
@@ -8,7 +9,7 @@ import {
   useSyncExternalStore,
   useMemo,
 } from "react";
-import { Alert, Keyboard } from "react-native";
+import { Keyboard } from "react-native";
 
 import { loadLocalAttachmentPreview } from "../lib/localAttachmentPreview";
 import { useRefreshAssetUrl } from "../state/assets";
@@ -44,15 +45,14 @@ function PreviewItemResolver(props: {
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const onResolutionError = useEffectEvent((error: unknown, fallbackMessage: string) => {
     if (props.onOpenError) props.onOpenError(error);
-    else Alert.alert("Could not open preview", fallbackMessage);
+    else Dialog.alert("Could not open preview", fallbackMessage);
     onRequestClose();
   });
   useEffect(() => Keyboard.dismiss(), []);
   useEffect(() => {
     if (environmentId === null || uri !== null) return;
     let cancelled = false;
-    // A cached URL may have expired while the app was suspended. Await reauthorization
-    // before handing a URL to Quick Look or ACTION_VIEW, which retain that URL.
+    // Refresh expired URLs before handing them to Quick Look or ACTION_VIEW, which retain them.
     void refreshAssetUrl()
       .then((url) => {
         if (cancelled) return;
@@ -147,7 +147,7 @@ function ResolvedFilePreview(props: {
 export function FilePreviewModal(props: {
   readonly source: FilePreviewSource | null;
   readonly onRequestClose: () => void;
-  /** Replaces the default alert when the platform cannot open the document. */
+
   readonly onOpenError?: (error: unknown) => void;
 }) {
   const group = useContext(FilePreviewGallery);
@@ -173,8 +173,7 @@ export function FilePreviewModal(props: {
     },
     [navigation],
   );
-  // The v5 card host sits inside a legacy presentation envelope whose focus context
-  // can describe a different route. The preview belongs to this navigation route.
+  // The legacy envelope's focus context may describe a different route than this v5 card.
   const isFocused = useSyncExternalStore(
     subscribeToFocus,
     navigation.isFocused,

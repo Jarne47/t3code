@@ -1,7 +1,7 @@
 import { ArrowDownWideNarrowIcon, ChevronDownIcon } from "lucide-react";
 import { SidebarActiveSortOrder } from "@t3tools/contracts/settings";
 import * as Schema from "effect/Schema";
-import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
+import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -28,7 +28,6 @@ export function SidebarSortMenu({ disabled }: { disabled: boolean }) {
   const order = savedOrder === "project" ? "updated_at" : savedOrder;
   const recentProjectsFirst = useClientSettings((settings) => settings.sidebarRecentProjectsFirst);
   const projectsFollowMessages = grouped && order === "updated_at" && recentProjectsFirst;
-  const updateSettings = useUpdateClientSettings();
   return (
     <div className="mt-1 flex items-center justify-end">
       <Menu>
@@ -54,7 +53,7 @@ export function SidebarSortMenu({ disabled }: { disabled: boolean }) {
             value={order}
             onValueChange={(value) => {
               if (isActiveSortOrder(value)) {
-                void updateSettings({
+                void updateClientSettings({
                   sidebarActiveSortOrder: value,
                   sidebarGroupActiveThreads: grouped,
                 });
@@ -71,7 +70,7 @@ export function SidebarSortMenu({ disabled }: { disabled: boolean }) {
           <MenuCheckboxItem
             checked={grouped}
             onCheckedChange={(checked) => {
-              void updateSettings({
+              void updateClientSettings({
                 sidebarGroupActiveThreads: checked,
                 sidebarActiveSortOrder: order,
               });
@@ -83,7 +82,7 @@ export function SidebarSortMenu({ disabled }: { disabled: boolean }) {
             <MenuCheckboxItem
               checked={recentProjectsFirst}
               onCheckedChange={(checked) => {
-                void updateSettings({ sidebarRecentProjectsFirst: checked });
+                void updateClientSettings({ sidebarRecentProjectsFirst: checked });
               }}
             >
               Recently messaged projects first

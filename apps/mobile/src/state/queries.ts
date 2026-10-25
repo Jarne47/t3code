@@ -1,4 +1,7 @@
-import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
+import {
+  composerPullRequestsFromLinks,
+  filterComposerPullRequestMatches,
+} from "@t3tools/shared/composerPullRequestMatches";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { environmentSession } from "./session";
 import { useEnvironmentPresentation } from "./presentation";
@@ -7,21 +10,25 @@ import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
   ProjectId,
-  ThreadId,
+  ThreadPullRequestLink,
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
 import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
+  visibleThreadSearch,
   type EnvironmentThreadSearchMatch,
+  type SettledThreadSearch,
 } from "@t3tools/client-runtime/state/thread-search";
+import { THREAD_SEARCH_QUERY_MAX_LENGTH } from "@t3tools/contracts";
+import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import { orchestrationEnvironment } from "./orchestration";
@@ -37,7 +44,7 @@ import {
 
 const COMPOSER_PATH_SEARCH_DEBOUNCE_MS = 200;
 const COMPOSER_PATH_SEARCH_LIMIT = 20;
-const THREAD_SEARCH_DEBOUNCE_MS = 200;
+const THREAD_SEARCH_DEBOUNCE_MS = 120;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
@@ -81,9 +88,14 @@ export function useComposerPullRequestSearch(input: {
   environmentId: EnvironmentId | null;
   projectId: ProjectId | null;
   repository: string | null;
+  threadPullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
   query: string | null;
 }) {
   const query = useDebouncedValue(input.query, 180);
+  const linked =
+    input.projectId === null
+      ? []
+      : composerPullRequestsFromLinks(input.threadPullRequests ?? [], input.projectId);
   const ready =
     query === input.query &&
     query !== null &&
@@ -117,11 +129,12 @@ export function useComposerPullRequestSearch(input: {
         })
       : null,
   );
-  const entries = useMemo(() => {
+  const entries = (() => {
     if (!ready) return [];
     if (numeric) {
       return filterComposerPullRequestMatches({
         entries: [...(exact.data ? [exact.data] : []), ...(list.data?.entries ?? [])],
+        linked,
         projectId: input.projectId!,
         repository: input.repository!,
         query: query ?? "",
@@ -142,7 +155,7 @@ export function useComposerPullRequestSearch(input: {
     return [...unique.values()]
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, 20);
-  }, [ready, exact.data, list.data, input.projectId, input.repository, numeric, query]);
+  })();
   return {
     entries,
     isPending: input.query !== null && (query !== input.query || list.isPending || exact.isPending),
@@ -155,23 +168,39 @@ export function useThreadSearch(
   query: string,
 ): {
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+  /** The query `matches` are for, which lags the typed one while a search runs. */
+  readonly query: string;
   readonly isPending: boolean;
 } {
-  const normalizedQuery = query.trim();
+  // A pasted wall of text searches by its start rather than failing the request.
+  const normalizedQuery = query.trim().slice(0, THREAD_SEARCH_QUERY_MAX_LENGTH).trim();
   const debouncedQuery = useDebouncedValue(normalizedQuery, THREAD_SEARCH_DEBOUNCE_MS);
-  const canSearch = environmentIds.length > 0 && normalizedQuery.length >= 2;
+  // The server needs a word of three or more letters; shorter queries would always come back empty.
+  const canSearch =
+    environmentIds.length > 0 && messageSearchTokens(normalizedQuery).long.length > 0;
   const settledQuery = canSearch && normalizedQuery === debouncedQuery ? debouncedQuery : null;
-  const searchKey = useMemo(
-    () => (settledQuery === null ? null : makeThreadSearchKey(environmentIds, settledQuery)),
-    [environmentIds, settledQuery],
-  );
+  const searchKey =
+    settledQuery === null ? null : makeThreadSearchKey(environmentIds, settledQuery);
   const result = useAtomValue(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearchResultsAtom(searchKey),
   );
-  const isDebouncing = canSearch && normalizedQuery !== debouncedQuery;
+  const isPending = canSearch && (normalizedQuery !== debouncedQuery || result.isLoading);
+  // What fast environments returned shows without waiting for a slow one;
+  // callers keep shown rows in place with `nextShownOrder`.
+  const ready =
+    settledQuery !== null && (!result.isLoading || result.matches.length > 0)
+      ? { query: settledQuery, matches: result.matches }
+      : null;
+  // Kept from earlier renders: React's pattern for information from previous renders.
+  const [previous, setPrevious] = useState<SettledThreadSearch | null>(null);
+  if (ready !== null && previous?.matches !== ready.matches) setPrevious(ready);
+  const visible = canSearch
+    ? visibleThreadSearch(normalizedQuery, ready, previous)
+    : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES };
   return {
-    matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
-    isPending: canSearch && (isDebouncing || result.isLoading),
+    matches: visible.matches,
+    query: visible.query,
+    isPending,
   };
 }
 
@@ -209,29 +238,22 @@ export function usePaginatedBranches(target: VcsRefTarget) {
     cursors: INITIAL_BRANCH_CURSORS,
   });
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_BRANCH_CURSORS;
-  const pageAtoms = useMemo(
-    () =>
-      target.environmentId !== null && target.cwd !== null
-        ? cursors.map((cursor) =>
-            vcsEnvironment.listRefs({
-              environmentId: target.environmentId!,
-              input: {
-                cwd: target.cwd!,
-                ...(query.length > 0 ? { query } : {}),
-                ...(cursor === undefined ? {} : { cursor }),
-                limit: VCS_REF_LIST_LIMIT,
-              },
-            }),
-          )
-        : [],
-    [cursors, query, target.cwd, target.environmentId],
-  );
-  const pagesAtom = useMemo(
-    () =>
-      Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
-        Atom.withLabel(`mobile:vcs-ref-pages:${targetKey ?? "empty"}`),
-      ),
-    [pageAtoms, targetKey],
+  const pageAtoms =
+    target.environmentId !== null && target.cwd !== null
+      ? cursors.map((cursor) =>
+          vcsEnvironment.listRefs({
+            environmentId: target.environmentId!,
+            input: {
+              cwd: target.cwd!,
+              ...(query.length > 0 ? { query } : {}),
+              ...(cursor === undefined ? {} : { cursor }),
+              limit: VCS_REF_LIST_LIMIT,
+            },
+          }),
+        )
+      : [];
+  const pagesAtom = Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
+    Atom.withLabel(`mobile:vcs-ref-pages:${targetKey ?? "empty"}`),
   );
   const results = useAtomValue(pagesAtom);
   const values = results.flatMap((result) => {
@@ -271,14 +293,14 @@ export function usePaginatedBranches(target: VcsRefTarget) {
             : "Failed to load refs.";
         })()
       : null;
-  const refresh = useCallback(() => {
+  const refresh = () => {
     const firstPage = pageAtoms[0];
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
     if (firstPage !== undefined) {
       appAtomRegistry.refresh(firstPage);
     }
-  }, [pageAtoms, targetKey]);
-  const loadNext = useCallback(() => {
+  };
+  const loadNext = () => {
     if (targetKey === null || data?.nextCursor === null || data?.nextCursor === undefined) {
       return;
     }
@@ -289,7 +311,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
         ? { targetKey, cursors: currentCursors }
         : { targetKey, cursors: [...currentCursors, data.nextCursor!] };
     });
-  }, [data?.nextCursor, targetKey]);
+  };
 
   return {
     data,
@@ -303,14 +325,11 @@ export function usePaginatedBranches(target: VcsRefTarget) {
 }
 
 export function useComposerPathSearch(target: ComposerPathSearchTarget) {
-  const normalizedTarget = useMemo(
-    () => ({
-      environmentId: target.environmentId,
-      cwd: target.cwd,
-      query: normalizeComposerPathSearchQuery(target.query),
-    }),
-    [target.cwd, target.environmentId, target.query],
-  );
+  const normalizedTarget = {
+    environmentId: target.environmentId,
+    cwd: target.cwd,
+    query: normalizeComposerPathSearchQuery(target.query),
+  };
   const debouncedTarget = useDebouncedValue(normalizedTarget, COMPOSER_PATH_SEARCH_DEBOUNCE_MS);
   const fileAccessSession = useEnvironmentQuery(
     debouncedTarget.environmentId === null
@@ -359,16 +378,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
 }
 
 export function useCheckpointDiff(target: CheckpointDiffTarget) {
-  const targets = useMemo(
-    () => buildCheckpointDiffTargets(target),
-    [
-      target.environmentId,
-      target.fromTurnCount,
-      target.ignoreWhitespace,
-      target.threadId,
-      target.toTurnCount,
-    ],
-  );
+  const targets = buildCheckpointDiffTargets(target);
   const fullThread = useEnvironmentQuery(
     targets.fullThread === null
       ? null
@@ -380,7 +390,6 @@ export function useCheckpointDiff(target: CheckpointDiffTarget) {
   return targets.fullThread === null ? turn : fullThread;
 }
 
-/** Full input and output for one tool row; pass null to skip fetching. */
 export function useTurnItemDetail(
   target: {
     readonly environmentId: EnvironmentId;

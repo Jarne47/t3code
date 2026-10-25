@@ -14,22 +14,15 @@ export type ThreadHistoryLoadEarlierResult =
 
 export type ThreadHistoryHandler = {
   readonly loadEarlier: (throughEntryId?: string) => Effect.Effect<ThreadHistoryLoadEarlierResult>;
+  readonly reconcilePendingWork: () => Effect.Effect<void>;
 };
 
-/**
- * Opaque registration token returned by `register`. Finalizers must pass the
- * same token so an older fiber cannot delete a newer handler for the key.
- */
 export type ThreadHistoryRegistration = {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly handler: ThreadHistoryHandler;
 };
 
-/**
- * Per-thread registration for progressive history loads. Thread state fibers
- * register while active; mobile UI dispatches through `loadEarlier`.
- */
 export class ThreadHistoryController extends Context.Service<
   ThreadHistoryController,
   {
@@ -44,6 +37,10 @@ export class ThreadHistoryController extends Context.Service<
       threadId: ThreadId,
       throughEntryId?: string,
     ) => Effect.Effect<ThreadHistoryLoadEarlierResult>;
+    readonly reconcilePendingWork: (
+      environmentId: EnvironmentId,
+      threadId: ThreadId,
+    ) => Effect.Effect<void>;
   }
 >()("@t3tools/client-runtime/state/threadHistoryController") {}
 
@@ -88,6 +85,14 @@ export const layer: Layer.Layer<ThreadHistoryController> = Layer.effect(
             }
             return handler.loadEarlier(throughEntryId);
           }),
+        ),
+      reconcilePendingWork: (environmentId, threadId) =>
+        Ref.get(handlers).pipe(
+          Effect.flatMap(
+            (current) =>
+              current.get(threadKey({ environmentId, threadId }))?.reconcilePendingWork() ??
+              Effect.void,
+          ),
         ),
     });
   }),

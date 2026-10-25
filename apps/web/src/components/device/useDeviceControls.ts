@@ -5,7 +5,7 @@ import type {
   DeviceSummary,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { deviceEnvironment } from "~/state/device";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -17,7 +17,7 @@ type ActionBody = DeviceActionInput extends infer A
     : never
   : never;
 
-/** One confirmed settings snapshot and serialized actions for the rail and drawer. Mount keyed by device. */
+/** Mount keyed by device. */
 export function useDeviceControls(options: {
   environmentId: EnvironmentId;
   device: DeviceSummary;
@@ -31,20 +31,16 @@ export function useDeviceControls(options: {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [foreground, setForeground] = useState<DeviceForegroundInfo | null | undefined>();
-  // Hiding invalidates UI results, but does not cancel host commands. Keep them serialized
-  // until settlement rather than allowing a reopened panel to race the previous command.
+  // Hiding invalidates results without cancelling host commands; serialize through settlement across reopen.
   const busy = useRef(false);
   const generation = useRef(0);
   const visibleRead = useRef<Parameters<typeof readDetail>[0] | null>(null);
-  const target = useMemo(
-    () => ({ hostId: device.hostId, deviceId: device.id }),
-    [device.hostId, device.id],
-  );
+  const { hostId, id: deviceId } = device;
 
   useEffect(() => {
     const revision = ++generation.current;
     if (!visible) return;
-    const request = { environmentId, input: target };
+    const request = { environmentId, input: { hostId, deviceId } };
     visibleRead.current = request;
     void readDetail(request).then((result) => {
       if (generation.current !== revision) return;
@@ -60,7 +56,7 @@ export function useDeviceControls(options: {
       visibleRead.current = null;
       generation.current++;
     };
-  }, [environmentId, readDetail, target, visible]);
+  }, [deviceId, environmentId, hostId, readDetail, visible]);
 
   useEffect(() => {
     if (!access || !visible) return;
@@ -82,20 +78,18 @@ export function useDeviceControls(options: {
   const act = async (body: ActionBody) => {
     if (busy.current || !available) return;
     busy.current = true;
-    // A settings read started before this action must not overwrite its confirmed result.
     const revision = ++generation.current;
     setPending(true);
     setError(null);
     return runAction({
       environmentId,
-      input: { ...target, ...body } as DeviceActionInput,
+      input: { hostId, deviceId, ...body } as DeviceActionInput,
     })
       .then((result) => {
         if (generation.current !== revision) {
           const request = visibleRead.current;
           if (!request) return;
-          // Reopening can read settings before the host command finishes. Confirm them again
-          // after it settles, keeping actions serialized through this refresh.
+          // Reopening can read before pending commands settle; refresh again before allowing actions.
           const refreshRevision = ++generation.current;
           return readDetail(request).then((refreshed) => {
             if (generation.current !== refreshRevision) return;

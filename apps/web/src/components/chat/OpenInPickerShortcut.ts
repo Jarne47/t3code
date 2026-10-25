@@ -2,7 +2,10 @@ import type { EditorId, EnvironmentId, ResolvedKeybindingsConfig } from "@t3tool
 import { useEffect } from "react";
 
 import { usePreferredEditor } from "../../editorPreferences";
+import { editorLabelForPlatform } from "../../editorLabels";
 import { isOpenFavoriteEditorShortcut } from "../../keybindings";
+import { announce } from "../../lib/announce";
+import { useRemoteOpenState } from "../../remoteOpen";
 import { shellEnvironment } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -21,23 +24,35 @@ export function useOpenFavoriteEditorShortcut({
 }) {
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor] = usePreferredEditor(availableEditors);
+  const remote = useRemoteOpenState(environmentId);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || remote.mode !== "local-exec") return;
     const handler = (event: globalThis.KeyboardEvent) => {
-      if (!isOpenFavoriteEditorShortcut(event, keybindings)) return;
+      if (event.defaultPrevented || !isOpenFavoriteEditorShortcut(event, keybindings)) return;
       if (!openInCwd || !preferredEditor) return;
 
       event.preventDefault();
+      const label = editorLabelForPlatform(preferredEditor, navigator.platform);
       void openInEditorMutation({
         environmentId,
         input: {
           cwd: openInCwd,
           editor: preferredEditor,
         },
+      }).then((result) => {
+        if (result._tag === "Success") announce(`Opened in ${label}`);
       });
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [enabled, environmentId, keybindings, openInCwd, openInEditorMutation, preferredEditor]);
+  }, [
+    enabled,
+    environmentId,
+    keybindings,
+    openInCwd,
+    openInEditorMutation,
+    preferredEditor,
+    remote.mode,
+  ]);
 }

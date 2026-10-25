@@ -6,7 +6,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
-import { useEffect, useEffectEvent, useMemo } from "react";
+import { useEffect, useEffectEvent } from "react";
 
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { modelPickerJumpIndexFromCommand, resolveShortcutCommand } from "../../keybindings";
@@ -44,7 +44,7 @@ export function useFavoriteModelShortcut(input: {
     onSelect,
   } = input;
   const selectModel = useEffectEvent(onSelect);
-  const models = useMemo(() => {
+  const models = (() => {
     const favoriteKeys = new Set(
       favorites.map((favorite) => providerModelKey(favorite.provider, favorite.model)),
     );
@@ -72,14 +72,7 @@ export function useFavoriteModelShortcut(input: {
     return sortProviderModelItems(candidates, {
       instanceOrder: instanceEntries.map((entry) => entry.instanceId),
     });
-  }, [
-    favorites,
-    getModelDisabledReason,
-    instanceEntries,
-    lockedContinuationGroupKey,
-    lockedProvider,
-    modelOptionsByInstance,
-  ]);
+  })();
 
   useEffect(() => {
     if (!enabled) return;

@@ -34,11 +34,6 @@ const guideDependencies = [
 const REGISTER_EVERY_PR =
   "Register every pull request you open for this thread, including each layer of a stack, right after creating it.";
 
-/**
- * Either the pull request's URL or its repository and number. Both forms
- * resolve to the same host-level identity, so the agent can pass whichever
- * the host CLI handed back.
- */
 export const PullRequestTargetInput = Schema.Struct({
   threadId: Schema.optional(
     ThreadId.annotate({
@@ -48,7 +43,7 @@ export const PullRequestTargetInput = Schema.Struct({
   url: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description:
-        "The pull request's web URL, for example https://github.com/owner/repo/pull/123. Preferred when you have it; host, repository and number are read from it.",
+        "The pull request's web URL as its host shows it, for example https://git.example.com/owner/repo/pull/123 or https://git.example.com/group/project/-/merge_requests/123. Preferred when you have it; host, repository and number are read from it.",
     }),
   ),
   repository: Schema.optional(
@@ -65,7 +60,7 @@ export const PullRequestTargetInput = Schema.Struct({
   host: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description:
-        "Host the repository lives on, for example github.com. Defaults to the host of this thread's project.",
+        "Host the repository lives on, for example git.example.com. Defaults to the host of this thread's project.",
     }),
   ),
 });
@@ -95,6 +90,15 @@ export class PullRequestHostRequiredError extends Schema.TaggedError<PullRequest
 ) {
   override get message(): string {
     return "This thread's project has no recognised remote. Pass host or url.";
+  }
+}
+
+export class PullRequestUrlUnavailableError extends Schema.TaggedError<PullRequestUrlUnavailableError>()(
+  "PullRequestUrlUnavailableError",
+  {},
+) {
+  override get message(): string {
+    return "This thread's project is on a host with no known pull request URL shape. Pass url.";
   }
 }
 
@@ -194,6 +198,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
+  PullRequestUrlUnavailableError,
   PullRequestThreadRequiredError,
   PullRequestThreadNotFoundError,
   PullRequestLinkFailedError,
@@ -255,7 +260,7 @@ export const ThreadPullRequestEntry = Schema.Struct({
   stack: Schema.NullOr(
     Schema.Struct({
       kind: Schema.Literals(["native", "derived"]),
-      /** 1-based, bottom of the stack first. */
+      /** 1-based layer from the bottom; siblings share a layer. */
       position: Schema.Int,
       size: Schema.Int,
     }),
@@ -268,7 +273,7 @@ export const ListThreadPullRequestsResult = Schema.Struct({
   chains: Schema.Array(
     Schema.Struct({
       kind: Schema.Literals(["native", "derived"]),
-      /** Bottom to top. */
+      /** Bottom to top; each pull request comes before the ones built on it. */
       numbers: Schema.Array(Schema.Int),
     }),
   ),
@@ -347,7 +352,6 @@ const UnwatchPullRequestTool = Tool.make("unwatch_pull_request", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
-/** A pull request to write or read a guide for, by URL or by repository and number. */
 const GuideTarget = Schema.Struct({
   url: PullRequestTargetInput.fields.url,
   repository: PullRequestTargetInput.fields.repository,

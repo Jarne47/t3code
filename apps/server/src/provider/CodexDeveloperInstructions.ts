@@ -4,8 +4,11 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
-  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  T3_CODE_ORCHESTRATION_SECTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
+
+/** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
+export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
 const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## T3 Code devices
 
@@ -21,13 +24,7 @@ const normalizeAvailability = (
 ): T3CodeToolAvailability =>
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
-/**
- * Each block is omitted entirely when its tools aren't attached. Describing
- * `preview_*` or `device_*` tools that aren't in the turn's tool list would be
- * worse than saying nothing: the instructions actively steer the model away
- * from Playwright, agent-browser, and raw simctl/adb, so leaving them in would
- * talk it out of the only automation it still has.
- */
+/** Instructions for unavailable tools would steer the model away from its remaining automation. */
 const toolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
   const tools = normalizeAvailability(availability);
   return [
@@ -184,38 +181,29 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 export interface CodexRuntimeInfo {
   readonly model: string;
   readonly modelName?: string | undefined;
-  readonly reasoningEffort: string;
+  readonly reasoningEffort?: string | undefined;
 }
 
-/** Mode prompt for `turn/start.collaborationMode.settings.developer_instructions`. */
 export function buildCodexDeveloperInstructions(interactionMode: ProviderInteractionMode): string {
   return interactionMode === "plan"
     ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
     : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
 }
 
-/**
- * T3 Code context for `turn/start.additionalContext`. Codex renders each entry
- * as a `<key>value</key>` developer message and resends it only when the value
- * changes.
- *
- * This must stay out of the collaboration mode: when the model catalog ships
- * its own text for a mode, as newer models do, Codex uses that text and drops
- * the client's `developer_instructions` entirely.
- */
+/** Keep this outside collaboration mode; model-catalog mode text overrides client developer_instructions. */
 export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
-  /**
-   * Whether the `t3-code` MCP server is attached to this turn. Callers derive
-   * it from the session's actual MCP configuration rather than re-reading the
-   * setting, so the prompt cannot claim tools the turn doesn't have.
-   */
   toolsAvailable: boolean | T3CodeToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
-  // Separate keys keep each value under Codex's per-entry token cap.
+  // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
-    t3_code_orchestration: { kind: "application", value: T3_CODE_ORCHESTRATION_INSTRUCTIONS },
+    ...Object.fromEntries(
+      T3_CODE_ORCHESTRATION_SECTIONS.map((section, index) => [
+        `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+        { kind: "application" as const, value: section },
+      ]),
+    ),
     t3_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),

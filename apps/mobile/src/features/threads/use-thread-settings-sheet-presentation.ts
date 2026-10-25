@@ -5,45 +5,17 @@ import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 
 type PresentationPhase = "closed" | "opening" | "visible" | "restoring";
 
-/**
- * The navigator-level UIKit completion event added by the repo's
- * `@react-navigation/native-stack` patch; absent from upstream event maps.
- */
+/** UIKit completion event from the native-stack patch; absent from upstream event maps. */
 export type NavigationWithFinishTransitioning = {
   readonly addListener: (type: "finishTransitioning", callback: () => void) => () => void;
 };
 
-/**
- * How long after the dismissal's state change the keyboard starts rising, so
- * its ~250ms show overlaps the tail of the sheet's ~500ms travel the way
- * UIKit apps choreograph it. This is aesthetics, not correctness: without
- * keepFocus-style inputView overrides a show started mid-dismissal completes
- * cleanly, so a slower device merely gets more overlap — no failure mode.
- * The navigator's `finishTransitioning` event (UIKit's real completion
- * callback, surfaced by the repo's native-stack patch) additionally bounds
- * the restore at the true landing moment should this timer ever lag it.
- */
 const SHEET_DISMISSAL_KEYBOARD_OVERLAP_MS = 300;
 
-/**
- * A JS-initiated dismissal pops state before its animation runs; a
- * gesture-driven one animates natively first and pops afterwards, with the
- * navigator's completion event landing a few dozen milliseconds before the
- * pop. A completion this fresh at pop time therefore means the sheet is
- * already gone and the keyboard should return immediately. The two orderings
- * are separated by the sheet's full ~500ms travel, so this window is a
- * classification with wide margin, not an animation race.
- */
+/** Gesture dismissal completes before router pop; recent completion means keyboard restoration need not wait again. */
 const NATIVE_DISMISSAL_ECHO_WINDOW_MS = 150;
 
-/**
- * Keeps the custom native composer and the settings sheet from owning focus at
- * the same time. Opening resigns the editor cleanly; a dismissal re-focuses it
- * once the sheet has fully landed. A plain blur/focus pair costs one keyboard
- * animation each way — keepFocus-style inputView overrides are avoided because
- * removing them forces UIKit to reload input views, replaying the keyboard's
- * show as a visible collapse/re-open.
- */
+/** Blur/focus costs two keyboard animations; inputView overrides also replay show when removed. */
 export function useThreadSettingsSheetPresentation(input: {
   readonly editorRef: RefObject<ComposerEditorHandle | null>;
   readonly isEditorFocused: boolean;
@@ -70,8 +42,6 @@ export function useThreadSettingsSheetPresentation(input: {
   }, [input.isEditorFocused]);
 
   useEffect(() => {
-    // React Strict Mode and Fast Refresh both run an effect cleanup/setup
-    // cycle without recreating refs. Re-arm the mounted guard on every setup.
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
@@ -98,9 +68,7 @@ export function useThreadSettingsSheetPresentation(input: {
     const openingId = openingIdRef.current + 1;
     openingIdRef.current = openingId;
 
-    // Start the keyboard transition before the custom native editor resigns
-    // first responder, then present the sheet on the next frame. The sheet and
-    // keyboard animate together instead of serializing two native transitions.
+    // Dismiss the keyboard before blur, then present next frame so native transitions overlap.
     void KeyboardController.dismiss({ animated: true });
     input.editorRef.current?.blur();
 
@@ -117,9 +85,7 @@ export function useThreadSettingsSheetPresentation(input: {
     focusRestoreIdRef.current = focusRestoreId;
     let attemptsRemaining = 20;
 
-    // Restoration runs after the dismissal transition, so the first attempt
-    // normally succeeds; the retries are insurance against UIKit briefly
-    // refusing first-responder status right at the transition boundary.
+    // Retry focus restoration if UIKit briefly refuses first responder at the dismissal boundary.
     const restoreFocus = () => {
       if (!isMountedRef.current || focusRestoreIdRef.current !== focusRestoreId) {
         return;
@@ -136,25 +102,18 @@ export function useThreadSettingsSheetPresentation(input: {
     requestAnimationFrame(restoreFocus);
   }, [input.editorRef]);
 
-  /** Runs the queued restore once — whichever completion signal arrives first. */
   const runPendingDismissalRestore = useCallback(() => {
     if (!restorePendingRef.current) {
       return;
     }
     restorePendingRef.current = false;
     clearDismissRestoreTimer();
-    // A reopened sheet owns focus again; drop the stale restore request.
     if (!isMountedRef.current || isActiveRef.current) {
       return;
     }
     restoreEditorFocus();
   }, [clearDismissRestoreTimer, restoreEditorFocus]);
 
-  /**
-   * Marks the sheet closed and queues the keyboard's return for the moment
-   * the dismissal transition actually completes: the sheet slides away over a
-   * resting composer, then the keyboard lifts it in one continuous motion.
-   */
   const onDismissed = useCallback(() => {
     isActiveRef.current = false;
 
@@ -162,17 +121,12 @@ export function useThreadSettingsSheetPresentation(input: {
       setPhase("closed");
       return;
     }
-    // Keep the card expanded across the handoff back to its editor. With a
-    // hardware keyboard there is no software-keyboard travel to hide a collapse
-    // while the sheet dismissal and focus restoration finish.
+    // Keep the card expanded during focus handoff; hardware keyboards cannot hide a collapse with keyboard travel.
     setPhase("restoring");
     restoreFocusAfterDismissRef.current = false;
     restorePendingRef.current = true;
     clearDismissRestoreTimer();
     if (Date.now() - lastStackTransitionFinishedAtRef.current <= NATIVE_DISMISSAL_ECHO_WINDOW_MS) {
-      // A stack transition finished just before this pop reached JS: the pop
-      // is the state echo of a gesture-driven dismissal whose animation has
-      // already completed. The sheet is gone — bring the keyboard back now.
       runPendingDismissalRestore();
       return;
     }
@@ -182,7 +136,6 @@ export function useThreadSettingsSheetPresentation(input: {
     }, SHEET_DISMISSAL_KEYBOARD_OVERLAP_MS);
   }, [clearDismissRestoreTimer, runPendingDismissalRestore]);
 
-  /** Wire to the navigator's `finishTransitioning` event. */
   const onStackTransitionsFinished = useCallback(() => {
     lastStackTransitionFinishedAtRef.current = Date.now();
     runPendingDismissalRestore();

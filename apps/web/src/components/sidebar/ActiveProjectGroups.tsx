@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   closestCenter,
   DndContext,
@@ -16,7 +16,7 @@ import {
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GripVerticalIcon } from "lucide-react";
-import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
+import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { resolveProjectExpanded, useUiStateStore } from "../../uiStateStore";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
@@ -164,8 +164,7 @@ export function ActiveProjectGroups({
   reorderable?: boolean;
 }) {
   const savedOrder = useClientSettings((settings) => settings.sidebarActiveProjectOrder);
-  const updateSettings = useUpdateClientSettings();
-  const keys = useMemo(() => groups.map((group) => group.key), [groups]);
+  const keys = groups.map((group) => group.key);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -178,7 +177,7 @@ export function ActiveProjectGroups({
         modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
         onDragEnd={({ active, over }) => {
           if (!over || active.id === over.id) return;
-          void updateSettings({
+          void updateClientSettings({
             sidebarActiveProjectOrder: reorderActiveProjectGroups(
               savedOrder,
               keys,

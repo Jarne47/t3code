@@ -191,7 +191,7 @@ const makeUpdaterService = (getUpdater: () => UpdaterDriver) =>
     },
   });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = makeUpdaterService(() => autoUpdater);
 
 export const layer = Layer.effect(

@@ -18,6 +18,15 @@ export interface ActiveThreadProjectGroup {
   readonly label: string;
 }
 
+/** The sidebar's active-section sort and project grouping settings. */
+export interface ActiveSidebarSort {
+  readonly order: SidebarActiveSortOrder;
+  readonly grouped: boolean;
+  readonly projectGroups: ReadonlyMap<string, ActiveThreadProjectGroup>;
+  readonly projectOrder: readonly string[];
+  readonly recentProjectsFirst: boolean;
+}
+
 export function activeThreadProjectGroup(
   thread: Pick<ActiveThread, "environmentId" | "projectId">,
   groups: ReadonlyMap<string, ActiveThreadProjectGroup>,

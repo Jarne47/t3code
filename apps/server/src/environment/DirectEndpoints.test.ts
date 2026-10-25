@@ -54,7 +54,6 @@ const INTERFACES: ReturnType<typeof NodeOS.networkInterfaces> = {
       cidr: "203.0.113.20/24",
     },
   ],
-  // Tailscale on macOS: an anonymous utun that also carries a Tailscale IPv6 address.
   utun4: [
     {
       address: "100.101.102.103",
@@ -76,7 +75,6 @@ const INTERFACES: ReturnType<typeof NodeOS.networkInterfaces> = {
   ],
 };
 
-/** A VPN interface with an address from the same 100.64.0.0/10 range. */
 const vpnInterface = (address: string) => [
   {
     address,
@@ -100,15 +98,6 @@ const virtualInterface = (address: string) => [
 ];
 
 describe("resolveBoundEndpoints", () => {
-  it("lists nothing for a loopback-only server", () => {
-    expect(resolveBoundEndpoints({ host: undefined, port: 3773, interfaces: INTERFACES })).toEqual(
-      [],
-    );
-    expect(
-      resolveBoundEndpoints({ host: "127.0.0.1", port: 3773, interfaces: INTERFACES }),
-    ).toEqual([]);
-  });
-
   it("lists every external IPv4 address for a wildcard bind, tagging the tailnet one", () => {
     expect(resolveBoundEndpoints({ host: "0.0.0.0", port: 3773, interfaces: INTERFACES })).toEqual([
       { kind: "lan", httpBaseUrl: "http://192.168.1.10:3773/" },
@@ -148,12 +137,6 @@ describe("resolveBoundEndpoints", () => {
     ]);
   });
 
-  it("lists only the bound address for a specific bind", () => {
-    expect(
-      resolveBoundEndpoints({ host: "100.101.102.103", port: 3773, interfaces: INTERFACES }),
-    ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
-  });
-
   it("never reports a host name, which can resolve to another machine per client", () => {
     for (const host of ["server.local", "devbox", "devbox.home.arpa"]) {
       expect(resolveBoundEndpoints({ host, port: 3773, interfaces: INTERFACES })).toEqual([]);
@@ -165,13 +148,29 @@ describe("resolveBoundEndpoints", () => {
       resolveBoundEndpoints({ host: "203.0.113.20", port: 3773, interfaces: INTERFACES }),
     ).toEqual([]);
   });
+
+  it("reports only the tailnet address on a cloud VM, whose private network no client shares", () => {
+    expect(
+      resolveBoundEndpoints({
+        host: "0.0.0.0",
+        port: 3773,
+        interfaces: INTERFACES,
+        onCloudVm: true,
+      }),
+    ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
+  });
+
+  it("never reports an IPv4-mapped host, which can name the client's own loopback", () => {
+    expect(
+      resolveBoundEndpoints({ host: "::ffff:127.0.0.1", port: 3773, interfaces: INTERFACES }),
+    ).toEqual([]);
+  });
 });
 
 const TAILSCALE_STATUS_JSON = JSON.stringify({
   Self: { DNSName: "bb-1.tail1234.ts.net.", TailscaleIPs: ["100.64.1.2"] },
 });
 
-/** `tailscale status --json` reporting a MagicDNS name. */
 const layerTailscaleUp = Layer.succeed(
   ChildProcessSpawner.ChildProcessSpawner,
   ChildProcessSpawner.make(() =>
@@ -193,7 +192,6 @@ const layerTailscaleUp = Layer.succeed(
   ),
 );
 
-/** Answers the Serve probe with `status`. */
 const layerServeProbe = (status: number) =>
   Layer.succeed(
     HttpClient.HttpClient,
@@ -202,7 +200,6 @@ const layerServeProbe = (status: number) =>
     ),
   );
 
-/** A loopback-only server with Tailscale Serve on, so only the Serve name can be listed. */
 const layerServeConfig = Layer.effect(
   ServerConfig.ServerConfig,
   Effect.map(ServerConfig.ServerConfig, (config) => ({

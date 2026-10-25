@@ -1,13 +1,14 @@
-import { AppActivityIndicator } from "../../components/AppActivityIndicator";
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 import { useEffect, useState } from "react";
-import { Platform, View } from "react-native";
+import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { SymbolView } from "../../components/AppSymbol";
-import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { SettingsActionRow } from "../settings/components/SettingsActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
@@ -18,8 +19,7 @@ import {
   type StartupCrashRecord,
 } from "./crash-log-model";
 
-// expo-updates keeps its persistent log this long. Reading any further back
-// returns nothing, so this is the whole available window.
+// expo-updates retains only seven days of logs.
 const LOG_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 type CrashLogState =
@@ -30,18 +30,12 @@ type CrashLogState =
 function appIdentity() {
   return {
     version: Constants.expoConfig?.version ?? "0.0.0",
-    build:
-      (Platform.OS === "ios"
-        ? Constants.platform?.ios?.buildNumber
-        : Constants.platform?.android?.versionCode?.toString()) ?? "dev",
+    // EAS assigns build numbers remotely, so expo-constants never sees them;
+    // only the installed binary knows its own.
+    build: Application.nativeBuildVersion ?? "dev",
   };
 }
 
-/**
- * Startup crashes that TestFlight and the stores strip from their reports.
- * expo-updates' ErrorRecovery writes the JS error and component stack to its
- * own log before aborting the process, so the next launch can show it here.
- */
 export function SettingsDiagnosticsRouteScreen() {
   const insets = useSafeAreaInsets();
   const [state, setState] = useState<CrashLogState>(() =>

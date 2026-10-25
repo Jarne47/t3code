@@ -130,14 +130,11 @@ function summarizePayload(payload: DiscordWebhookPayload) {
   } as const;
 }
 
-// Keep release text inert, including occurrences of the intentionally pinged role.
 const suppressMentions = (text: string) =>
   text.replace(/@(everyone|here)\b|<@[!&]?\d+>/g, (mention) => mention.replace("@", "@\u200b"));
 
 const escapeLinkLabel = (text: string) => text.replace(/[\\[\]]/g, "\\$&");
 
-// Compact GitHub's generated entries and comparison link, preserving custom
-// notes. Contributor links are GitHub profiles, not pings.
 function formatReleaseNotes(notes: string) {
   return notes
     .replace(
@@ -161,8 +158,6 @@ function formatReleaseNotes(notes: string) {
     );
 }
 
-// Preserve every character and prefer whole lines, then words. A single oversized
-// line still needs splitting, but never between the halves of a Unicode character.
 function splitDescription(text: string, limit: number) {
   const chunks: string[] = [];
   while (text.length > limit) {
@@ -203,8 +198,7 @@ export const buildDiscordReleaseAnnouncement = (
       ? suppressMentions(formatReleaseNotes(options.releaseNotes?.trim() ?? ""))
       : "";
   const description = notes ? `${intro}\n\n${notes}` : intro;
-  // One embed per message avoids Discord's URL deduplication. Reserve a full
-  // title and the version footer within the 6000-character aggregate limit.
+  // Separate embeds avoid URL deduplication; reserve title and footer space within Discord's 6000-character limit.
   const limit = Math.min(4096, 6000 - 256 - footerText.length);
   const descriptions = splitDescription(description, limit);
 
@@ -285,7 +279,6 @@ export const postDiscordWebhook = Effect.fn("postDiscordWebhook")(function* (
   const response = yield* HttpClientRequest.post(requestUrl).pipe(
     HttpClientRequest.bodyJson(payload),
     Effect.flatMap(httpClient.execute),
-    // Bound requests and retry waits together without shortening Retry-After.
     Effect.timeout("1 minute"),
     Effect.mapError(
       (error) =>

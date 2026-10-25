@@ -39,18 +39,12 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
 ) {}
 
 /**
- * Pure interrupt races with hard process teardown or a dead session produce
- * "not active" protocol errors. Retrying those only delays recovery.
- *
  * Do not apply this to `provider-turn.restart`: that compound effect also runs
  * detach and start. Swallowing a start failure that happens to mention
  * "is not active" would drop the outbox item without ever starting the
  * replacement turn.
  */
-export function isNonRetryableProviderTurnControlFailure(
-  effectType: string,
-  errorText: string,
-): boolean {
+function isNonRetryableProviderTurnControlFailure(effectType: string, errorText: string): boolean {
   if (effectType !== "provider-turn.interrupt") {
     return false;
   }
@@ -63,10 +57,6 @@ export function isNonRetryableProviderTurnControlFailure(
 }
 
 export interface OrchestrationEffectExecutorV2Shape {
-  /**
-   * Runs one claimed effect. `willRetry` is true when the worker will retry a
-   * failure, so a step can fail and try again instead of settling the run.
-   */
   readonly execute: (
     effect: EffectOutbox.OrchestrationEffectV2,
     options?: { readonly willRetry: boolean },
@@ -113,7 +103,6 @@ export const layerExecutor: Layer.Layer<
             return continueRestartedRun({ threadId: effect.threadId, sourceRunId }).pipe(
               Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
               Effect.provideService(ServerSettings.ServerSettingsService, settings),
-              // A continuation that will never run still owes a delegated parent a result.
               Effect.tapError(() =>
                 willRetry
                   ? Effect.void
@@ -197,8 +186,6 @@ export const layerExecutor: Layer.Layer<
                     ? Effect.void
                     : Effect.fail(cause),
                 ),
-                // A targeted Stop repairs only an outcome the provider actually observed.
-                // A full-turn Stop retains its existing process-teardown repair.
                 Effect.andThen((outcome) =>
                   request.subagent !== undefined && outcome === undefined
                     ? Effect.void
@@ -276,8 +263,7 @@ export const layerExecutor: Layer.Layer<
                     const message = projection.messages.find((item) => item.id === messageId);
                     const run = projection.runs.find((item) => item.id === message?.runId);
                     if (message === undefined || run === undefined) return yield* error;
-                    // Reuse the message identity and a stable command receipt so an outbox
-                    // retry cannot append a duplicate message or start a second follow-up.
+                    // Reuse message ids and receipts so retries cannot duplicate messages or follow-ups.
                     yield* threads
                       .dispatch({
                         type: "message.dispatch",
@@ -287,9 +273,6 @@ export const layerExecutor: Layer.Layer<
                         text: message.text,
                         ...(message.context ? { context: message.context } : {}),
                         attachments: message.attachments,
-                        // A user's follow-up starts on the thread's saved selection,
-                        // which already holds the steer's choice. A delegated
-                        // completion stays pinned to the run it reports to.
                         ...(message.delegatedCompletion === undefined
                           ? {}
                           : { modelSelection: run.modelSelection }),
@@ -315,11 +298,7 @@ export const layerExecutor: Layer.Layer<
                           : { senderThreadId: message.senderThreadId }),
                       })
                       .pipe(
-                        // The turn that just completed leaves no further retry
-                        // target once the instance is off: the completed turn
-                        // stands as the thread's result instead of going
-                        // through the outbox's bounded retry on a refusal that
-                        // retrying cannot change.
+                        // A disabled instance cannot retry this completed turn; its result stands.
                         Effect.catchTags({
                           ThreadManagementProviderInstanceDisabledError: (disabledError) =>
                             Effect.logInfo(
@@ -391,7 +370,8 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
-          case "runtime-request.respond":
+          case "runtime-request.respond": {
+            const requestId = effect.request.requestId;
             return runtimeRequests
               .respond({
                 threadId: effect.threadId,
@@ -400,11 +380,33 @@ export const layerExecutor: Layer.Layer<
                 ...(effect.request.decision === undefined
                   ? {}
                   : { decision: effect.request.decision }),
+                ...(effect.request.feedback === undefined
+                  ? {}
+                  : { feedback: effect.request.feedback }),
                 ...(effect.request.answers === undefined
                   ? {}
                   : { answers: effect.request.answers }),
               })
               .pipe(
+                Effect.tapCause((cause) =>
+                  willRetry || Cause.hasInterruptsOnly(cause)
+                    ? Effect.void
+                    : threads
+                        .dispatch({
+                          type: "runtime-request.delivery.fail",
+                          commandId: CommandId.make(`${effect.commandId}:delivery-failed`),
+                          threadId: effect.threadId,
+                          requestId,
+                        })
+                        .pipe(
+                          Effect.catchCause((recordCause) =>
+                            Effect.logWarning("Failed to record answer delivery failure", {
+                              effectId: effect.id,
+                              cause: recordCause,
+                            }),
+                          ),
+                        ),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({
@@ -414,6 +416,7 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          }
           case "provider-thread.rollback":
             return checkpointRollback
               .execute({
@@ -426,9 +429,6 @@ export const layerExecutor: Layer.Layer<
                   : { restoreFiles: effect.request.restoreFiles }),
               })
               .pipe(
-                // The last failed attempt tells waiting clients it failed,
-                // instead of leaving them to time out. Clients get a fixed
-                // message; the worker logs the full cause for each attempt.
                 Effect.tapCause((cause) =>
                   willRetry || Cause.hasInterruptsOnly(cause)
                     ? Effect.void
@@ -438,7 +438,10 @@ export const layerExecutor: Layer.Layer<
                           commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
                           threadId: effect.threadId,
                           requestId: effect.commandId,
-                          message: CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+                          message: Option.match(Cause.findErrorOption(cause), {
+                            onNone: () => CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+                            onSome: CheckpointRollbackService.rollbackFailureClientMessage,
+                          }),
                         })
                         .pipe(
                           Effect.catchCause((recordCause) =>
@@ -475,6 +478,17 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          case "scheduled-tasks.cleanup":
+            return resourceCleanup.cleanupScheduledTasks(effect.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "terminal.cleanup":
             return resourceCleanup.cleanupTerminals(effect.threadId).pipe(
               Effect.mapError(
@@ -686,8 +700,9 @@ export const layerWithOptions = (
           ? requeueClaim(effect, cause)
           : terminalizeClaim(effect, cause);
 
-      const runOnce = (excludeRestartContinuations = false) =>
-        Effect.gen(function* () {
+      // The worker probes for work repeatedly, including when the outbox is empty.
+      const runOnce = Effect.fnUntraced(
+        function* (excludeRestartContinuations = false) {
           const claimExit = yield* Effect.exit(
             outbox.claimNext({ workerId, leaseDurationMs, excludeRestartContinuations }),
           );
@@ -704,10 +719,7 @@ export const layerWithOptions = (
             return false;
           }
           const effect = claimed.value;
-          // Arm the process-local cancellation signal before re-reading durable
-          // state. A cancellation that commits after the row read has begun can
-          // then still win the execution race instead of falling into the gap
-          // between the read and signal registration.
+          // Arm cancellation before rereading durable state to close the read-to-registration race.
           const cancellation = outbox
             .awaitCancellation(effect.id)
             .pipe(Effect.as("cancelled" as const));
@@ -724,10 +736,7 @@ export const layerWithOptions = (
               ),
               Duration.millis(Math.max(0, claimedAt - eligibleAt)),
             );
-            // Cancellation can commit after the durable claim but before the
-            // process-local Deferred is registered. Re-read the authoritative row
-            // once before starting external work; later cancellations use the
-            // Deferred raced below.
+            // Recheck durable cancellation after registering the Deferred; cancellation may have committed after claim.
             if (yield* wasCancelled(effect.id)) {
               yield* outbox.clearCancellation(effect.id);
               return true;
@@ -769,8 +778,6 @@ export const layerWithOptions = (
             nonRetryable,
             error,
           });
-          // Prefer succeed for terminal interrupt races so the outbox does not
-          // keep a failed interrupt around; fail only when we must not retry.
           const updated = nonRetryable
             ? yield* outbox
                 .succeed({ effectId: effect.id, workerId })
@@ -796,13 +803,16 @@ export const layerWithOptions = (
             });
           }
           return true;
-        }).pipe(
-          Effect.mapError((cause) =>
-            isOrchestrationEffectWorkerError(cause)
-              ? cause
-              : new OrchestrationEffectWorkerError({ operation: "run", cause }),
+        },
+        (effect, _excludeRestartContinuations?: boolean) =>
+          effect.pipe(
+            Effect.mapError((cause) =>
+              isOrchestrationEffectWorkerError(cause)
+                ? cause
+                : new OrchestrationEffectWorkerError({ operation: "run", cause }),
+            ),
           ),
-        );
+      );
 
       return OrchestrationEffectWorkerV2.of({
         awaitWork: outbox.awaitAvailable,
@@ -817,14 +827,13 @@ export const layerWithOptions = (
               }),
           ),
         ),
-        drain: (maxEffects = Number.MAX_SAFE_INTEGER) =>
-          Effect.gen(function* () {
-            let completed = 0;
-            while (completed < maxEffects && (yield* runOnce())) {
-              completed += 1;
-            }
-            return completed;
-          }),
+        drain: Effect.fn("EffectWorker.drain")(function* (maxEffects = Number.MAX_SAFE_INTEGER) {
+          let completed = 0;
+          while (completed < maxEffects && (yield* runOnce())) {
+            completed += 1;
+          }
+          return completed;
+        }),
       });
     }),
   );
@@ -852,9 +861,7 @@ export const runDaemonWithOptions = (options: OrchestrationEffectDaemonOptions =
       const livenessPollIntervalMs = Number.isFinite(requestedLivenessPollIntervalMs)
         ? Math.max(1, Math.floor(requestedLivenessPollIntervalMs))
         : DEFAULT_EFFECT_WORKER_LIVENESS_POLL_INTERVAL_MS;
-      // Post-commit notifications are the low-latency path. `availableAt` is the
-      // durable retry schedule, and the long liveness poll only recovers from a
-      // missed in-process notification or work inserted by another process.
+      // Notifications wake promptly; availableAt persists retry timing, and liveness polling recovers missed wakeups.
       const runWorker = Effect.gen(function* () {
         while (true) {
           const outcome = yield* worker.runOnce.pipe(
@@ -870,9 +877,7 @@ export const runDaemonWithOptions = (options: OrchestrationEffectDaemonOptions =
             continue;
           }
           if (outcome === "failed") {
-            // A due row can remain visible when a claim UPDATE fails. Do not
-            // feed that past deadline back into the scheduler and retry at the
-            // one-millisecond floor; let transient database failures cool off.
+            // Failed claims can leave overdue rows; cool off instead of rescheduling at the one-millisecond floor.
             yield* Effect.sleep(Duration.millis(Math.min(1_000, livenessPollIntervalMs)));
             continue;
           }

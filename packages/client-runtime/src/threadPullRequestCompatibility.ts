@@ -4,14 +4,13 @@ import type {
   ThreadId,
   ThreadPullRequestKey,
 } from "@t3tools/contracts";
-import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
+import { normalizeThreadPullRequestKey } from "./threadPullRequests.ts";
 
 type LinkingCapabilities = Pick<
   ExecutionEnvironmentCapabilities,
   "threadPullRequests" | "threadPullRequestLinking"
 >;
 
-/** Capability negotiation keeps both single-link and multi-link environments usable. */
 export function threadPullRequestLinkMode(capabilities: LinkingCapabilities | null | undefined) {
   return capabilities?.threadPullRequests === true
     ? "multiple"

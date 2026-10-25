@@ -1,4 +1,5 @@
 import {
+  type ChatAttachment,
   CommandId,
   ModelSelection,
   type OrchestrationV2Command,
@@ -116,8 +117,33 @@ type MessageDispatchMode = Extract<
   { readonly type: "message.dispatch" }
 >["dispatchMode"];
 
-/** Resolve client intent from the state serialized by the thread dispatch lock. */
+export function isNativeMaintenanceCommand(message: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+}): boolean {
+  return (
+    message.attachments.length === 0 &&
+    ["/compact", "/logout"].includes(message.text.trim().toLowerCase())
+  );
+}
+
 export function resolveMessageDispatchIntent(
+  projection: OrchestrationV2ThreadProjection,
+  requestedMode: MessageDispatchMode,
+  deliveryIntent?: "auto" | "steer" | "restart",
+): MessageDispatchMode {
+  const mode = resolveDeliveryIntent(projection, requestedMode, deliveryIntent);
+  if (mode.type !== "steer_active") return mode;
+  // Compaction and sign-out cannot accept steers; queue follow-ups.
+  const target = projection.runs.find((run) => run.id === mode.targetRunId);
+  const targetMessage = projection.messages.find((message) => message.id === target?.userMessageId);
+  return targetMessage !== undefined && isNativeMaintenanceCommand(targetMessage)
+    ? { type: "queue_after_active" }
+    : mode;
+}
+
+function resolveDeliveryIntent(
   projection: OrchestrationV2ThreadProjection,
   requestedMode: MessageDispatchMode,
   deliveryIntent?: "auto" | "steer" | "restart",
@@ -138,7 +164,15 @@ export function resolveMessageDispatchIntent(
   if (deliveryIntent === "restart") {
     return { type: "restart_active", targetRunId: activeRun.id };
   }
-  if (activeRun.status === "preparing" || activeRun.status === "starting") {
+  // A run can be active before its provider turn starts or after it finishes.
+  // Queue automatic input in those gaps so steering cannot reject the message.
+  if (
+    activeRun.status === "preparing" ||
+    activeRun.status === "starting" ||
+    !projection.providerTurns.some(
+      (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
+    )
+  ) {
     return { type: "queue_after_active" };
   }
 
@@ -363,8 +397,7 @@ const ensureContextHandoff: CommandPolicyV2Shape["ensureContextHandoff"] = (inpu
 };
 
 const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input) => {
-  // Unsuccessful runs may have no native turn or assistant cursor. Forking
-  // those at native head can include later turns, so use the bounded transcript.
+  // Unsuccessful runs may lack native cursors; fork bounded transcripts to exclude later turns.
   const canForkNatively =
     (input.sourceRunStatus === "completed" || input.sourceRunStatus === "waiting") &&
     input.sameProvider &&

@@ -1,16 +1,6 @@
-/**
- * Presents one preview tab's debugger as a minimal CDP browser endpoint, so
- * the environment server can drive a desktop `<webview>` with the same
- * Playwright engine it uses for headless tabs.
- *
- * Only the tab's own page is reachable. Browser-level commands Playwright sends
- * while connecting are answered here, and every page command goes to the tab's
- * `webContents.debugger`. Electron allows one debugger client per webContents,
- * so the relay shares the attach the preview manager already holds.
- */
+// Electron allows one debugger per webContents; share the manager's attachment.
 
 export interface CdpRelayTarget {
-  /** Sends a command to the tab's page, or to a child session such as an iframe. */
   readonly send: (
     method: string,
     params: Record<string, unknown>,
@@ -21,18 +11,12 @@ export interface CdpRelayTarget {
   readonly url: () => string;
   readonly title: () => string;
   readonly userAgent: () => string;
-  /**
-   * Where the server wants this tab's downloads, named by their CDP guid. The
-   * desktop app and the server it launched share a disk, so the server's
-   * Playwright reads the file where it asked for it.
-   */
+  /** The desktop and its server share a disk; download paths need no translation. */
   readonly setDownloadDirectory: (directory: string | null) => void;
 }
 
 export interface CdpRelayConnection {
-  /** Feed one message from the server. */
   readonly receive: (raw: string) => void;
-  /** Feed one debugger event from the tab. */
   readonly event: (method: string, params: unknown, sessionId: string | undefined) => void;
 }
 
@@ -50,12 +34,9 @@ const isCommand = (value: unknown): value is CdpCommand =>
   typeof (value as { method?: unknown }).method === "string";
 
 const BROWSER_CONTEXT_ID = "t3-preview";
-/** Marks an event to send right after a command's reply. */
 const ANNOUNCE = Symbol("announce");
-/** The page's root session id, as Playwright sees it. */
 const PAGE_SESSION_ID = "t3-preview-page";
 
-/** Browser-level commands that only need acknowledging for a page the desktop owns. */
 const ACKNOWLEDGED = new Set([
   "Target.setDiscoverTargets",
   "Browser.grantPermissions",
@@ -69,11 +50,7 @@ export function createCdpRelayConnection(
 ): CdpRelayConnection {
   const send = (message: Record<string, unknown>) => write(JSON.stringify(message));
   let attached = false;
-  /**
-   * Sessions this relay invented. Extra page sessions (Playwright's
-   * `newCDPSession`) all reach the one real debugger session, so each gets the
-   * page's events; other ids are the page's own child sessions, such as iframes.
-   */
+  /** Relay-created page sessions share one real debugger; child frame sessions retain their own ids. */
   const sessions = new Map<string, "browser" | "page">([[PAGE_SESSION_ID, "page"]]);
   let sessionSequence = 0;
   const newSession = (kind: "browser" | "page") => {
@@ -95,8 +72,6 @@ export function createCdpRelayConnection(
     if (ACKNOWLEDGED.has(command.method)) return {};
     switch (command.method) {
       case "Browser.setDownloadBehavior": {
-        // The tab's debugger reports downloads as Chromium does, so the server
-        // sees them as its own. Only the directory needs the desktop's help.
         const directory = command.params?.["downloadPath"];
         const allowed = command.params?.["behavior"] !== "deny" && typeof directory === "string";
         target.setDownloadDirectory(allowed ? directory : null);
@@ -143,7 +118,6 @@ export function createCdpRelayConnection(
       case "Target.setAutoAttach": {
         if (attached) return {};
         attached = true;
-        // The page is announced once, right after this reply, as Chromium does.
         const info = await targetInfo();
         return {
           [ANNOUNCE]: {
@@ -159,10 +133,7 @@ export function createCdpRelayConnection(
 
   const pageCommand = (command: CdpCommand): Promise<unknown> => {
     const child = sessions.get(command.sessionId!) === "page" ? undefined : command.sessionId;
-    // The page itself is already running, but its child frames are not:
-    // Playwright auto-attaches with waitForDebuggerOnStart, so Chromium pauses
-    // every new cross-site iframe and worker until this reaches it. Swallowing
-    // it left sign-in checks and captchas, which run in such frames, frozen.
+    // Child frames/workers pause on auto-attach until resumed; only the main page can skip this command.
     if (command.method === "Runtime.runIfWaitingForDebugger" && child === undefined) {
       return Promise.resolve({});
     }
@@ -183,8 +154,7 @@ export function createCdpRelayConnection(
           ? browserCommand(command)
           : pageCommand(command);
       const route = command.sessionId === undefined ? {} : { sessionId: command.sessionId };
-      // Replies leave as commands finish, as Chromium's do, so a slow command
-      // such as a screenshot never holds up the ones behind it.
+      // Reply as commands finish so slow commands cannot block later replies.
       void result.then(
         (value) => {
           const announce =
