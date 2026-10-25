@@ -10,6 +10,7 @@ import { EnvironmentToolkit } from "./tools.ts";
 
 export function preferences(settings: ServerSettings) {
   const {
+    environmentName,
     defaultThreadEnvMode,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
@@ -18,6 +19,7 @@ export function preferences(settings: ServerSettings) {
   } = settings;
   const characters = Array.from(sourceControlWritingStyle.customInstructions);
   return {
+    environmentName,
     defaultThreadEnvMode,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,

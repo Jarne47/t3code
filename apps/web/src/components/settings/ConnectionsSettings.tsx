@@ -82,6 +82,7 @@ import {
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
+import { EnvironmentNameEditor } from "./EnvironmentNameEditor";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
 import { usePreparedConnection } from "~/state/session";
 import {
@@ -1753,6 +1754,12 @@ function SavedBackendListRow({
           {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
+      <EnvironmentNameEditor
+        environmentId={environmentId}
+        label={environment.label}
+        serverConfig={environment.serverConfig}
+        connected={enabled && isConnected}
+      />
       <Menu>
         <MenuTrigger
           render={
@@ -3628,26 +3635,34 @@ export function ConnectionsSettings() {
             }
             headerAction={
               primaryEnvironmentId !== null ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost-muted"
-                        size="icon-xs"
-                        aria-label="More actions for this machine"
+                <div className="flex items-center gap-1">
+                  <EnvironmentNameEditor
+                    environmentId={primaryEnvironmentId}
+                    label={primaryEnvironment?.label ?? "This machine"}
+                    serverConfig={primaryServerConfig}
+                    connected={primaryEnvironment?.connection.phase === "connected"}
+                  />
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost-muted"
+                          size="icon-xs"
+                          aria-label="More actions for this machine"
+                        />
+                      }
+                    >
+                      <EllipsisIcon className="size-3.5" />
+                    </MenuTrigger>
+                    <MenuPopup align="end">
+                      <EnvironmentIconMenu
+                        environmentId={primaryEnvironmentId}
+                        serverConfig={primaryServerConfig}
                       />
-                    }
-                  >
-                    <EllipsisIcon className="size-3.5" />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    <EnvironmentIconMenu
-                      environmentId={primaryEnvironmentId}
-                      serverConfig={primaryServerConfig}
-                    />
-                  </MenuPopup>
-                </Menu>
+                    </MenuPopup>
+                  </Menu>
+                </div>
               ) : null
             }
           >

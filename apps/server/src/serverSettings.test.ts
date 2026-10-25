@@ -580,6 +580,30 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     ).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("persists, broadcasts and clears the custom environment name", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        const changes = yield* settings.subscribeChanges;
+        const next = yield* settings.updateSettings({ environmentName: "  Itamar-Windows  " });
+        const change = Option.getOrUndefined(yield* Stream.runHead(changes));
+        assert.equal(next.environmentName, "Itamar-Windows");
+        assert.equal(change?.environmentName, "Itamar-Windows");
+        const persisted = yield* fs
+          .readFileString(config.settingsPath)
+          .pipe(Effect.flatMap(decodeServerSettingsJson));
+        assert.equal(persisted.environmentName, "Itamar-Windows");
+        yield* settings.updateSettings({ environmentName: "   " });
+        const restored = yield* fs
+          .readFileString(config.settingsPath)
+          .pipe(Effect.flatMap(decodeServerSettingsJson));
+        assert.equal(restored.environmentName, null);
+      }),
+    ).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("persists custom usage prices and removes them from the settings file", () =>
     Effect.scoped(
       Effect.gen(function* () {

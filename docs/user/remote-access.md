@@ -3,6 +3,11 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
+In **Settings → Connections**, use the pencil beside a machine to give it a custom
+T3 name. On mobile, open **Settings → Environments** and select the machine.
+The name is shared with every connected device. Clear it to restore the system
+name; renaming does not change the operating-system hostname or connection address.
+
 ## T3 Connect
 
 T3 Connect makes an environment available to your other devices without setting

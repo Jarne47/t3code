@@ -20,6 +20,7 @@ import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
@@ -185,6 +186,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
@@ -251,6 +253,7 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
+      environmentName: true,
       environmentIcon: true,
       projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
@@ -265,14 +268,27 @@ export const make = Effect.gen(function* () {
     },
   };
 
+  const readEnvironmentName = settings.getSettings.pipe(
+    Effect.map((current) => current.environmentName),
+    Effect.catchTags({
+      ServerSettingsError: (error) =>
+        Effect.logWarning("Could not read the custom environment name", { error }).pipe(
+          Effect.as(null),
+        ),
+    }),
+  );
+
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // The publish opt-in and relay link change at runtime (`t3 connect
-    // publish`, the client settings toggle), so the capability is read per
-    // descriptor request rather than baked in at startup.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
+    // Names and publishing settings can change without restarting the server.
+    getDescriptor: Effect.all({
+      agentActivityPublishing: readAgentActivityPublishingActive(secrets),
+      environmentName: readEnvironmentName,
+    }).pipe(
+      Effect.map(({ agentActivityPublishing, environmentName }) => ({
         ...descriptor,
+        label: environmentName?.trim() || label,
+        systemLabel: label,
         capabilities: { ...descriptor.capabilities, agentActivityPublishing },
       })),
     ),
@@ -281,12 +297,7 @@ export const make = Effect.gen(function* () {
 
 export const layerIdentity = Layer.effect(ServerEnvironmentIdentity, makeIdentity);
 
-/**
- * ServerEnvironment is acquired from persisted filesystem and host-process
- * state. It intentionally has no fallback Layer.succeed value: callers must
- * provide the external platform services, a ServerConfig, and the
- * ServerSecretStore backing the descriptor's publishing capability.
- */
+// The descriptor combines detected host identity with server-owned settings.
 export const layer = Layer.effect(ServerEnvironment, make).pipe(
   Layer.provideMerge(layerIdentity),
   Layer.provide(ProcessRunner.layer),

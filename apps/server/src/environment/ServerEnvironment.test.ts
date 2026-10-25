@@ -20,6 +20,7 @@ import {
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 
 const isServerEnvironmentIdPersistenceError = Schema.is(
@@ -28,6 +29,7 @@ const isServerEnvironmentIdPersistenceError = Schema.is(
 
 const layerServerEnvironment = (baseDir: string) =>
   ServerEnvironment.layer.pipe(
+    Layer.provide(ServerSettings.layerTest()),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
   );
@@ -103,6 +105,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(layerEmptySecretStore),
               Layer.provide(ServerConfig.layer({ ...config, mode })),
             ),
@@ -193,6 +196,35 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
 
+  it.effect("updates the shared name without restarting or changing environment identity", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-environment-name-" });
+      yield* Effect.gen(function* () {
+        const environment = yield* ServerEnvironment.ServerEnvironment;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const original = yield* environment.getDescriptor;
+        yield* settings.updateSettings({ environmentName: "  Lab-MacBookPro  " });
+        const renamed = yield* environment.getDescriptor;
+        expect(renamed.label).toBe("Lab-MacBookPro");
+        expect(renamed.systemLabel).toBe(original.label);
+        expect(renamed.environmentId).toBe(original.environmentId);
+        expect(renamed.capabilities.environmentName).toBe(true);
+        yield* settings.updateSettings({ environmentName: null });
+        const restored = yield* environment.getDescriptor;
+        expect(restored.label).toBe(original.label);
+        expect(restored.environmentId).toBe(original.environmentId);
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+            ServerSettings.layerTest(),
+          ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir))),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("persists the environment id across service restarts", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -235,7 +267,10 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         prefix: "t3-server-environment-publish-test-",
       });
       const layerTest = Layer.mergeAll(
-        ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+        ServerEnvironment.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(ServerSecretStore.layer),
+        ),
         ServerSecretStore.layer,
       ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
@@ -290,6 +325,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerSecretStore.layer),
               Layer.provide(ServerConfig.layer({ ...serverConfig, ...overrides })),
             ),
@@ -356,6 +392,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(layerEmptySecretStore),
               Layer.provide(Layer.merge(ServerConfig.layer(serverConfig), layerFailingFileSystem)),
             ),

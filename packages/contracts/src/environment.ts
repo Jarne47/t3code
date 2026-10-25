@@ -207,6 +207,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       Absent on older servers, where clients must clone with the blocking
       `sourceControl.cloneRepository` call instead. */
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
+  environmentName: Schema.optionalKey(Schema.Boolean),
   /** Server detects `platform.machine` and persists the `environmentIcon`
       setting. Older servers drop the key on write, so clients show the
       picker inert rather than offering a choice that would never stick. */
@@ -226,6 +227,7 @@ export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabi
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
+  systemLabel: Schema.optionalKey(TrimmedNonEmptyString),
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
   /** Absent on hosts from before explicit orchestration protocol negotiation. */

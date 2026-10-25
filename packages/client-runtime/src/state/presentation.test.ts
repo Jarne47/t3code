@@ -53,6 +53,32 @@ function harness() {
 }
 
 describe("environment summary subscriptions", () => {
+  it("updates names across summaries and usage presentations and restores the system name", () => {
+    const h = harness();
+    try {
+      const original = config();
+      const named = {
+        ...original,
+        environment: { ...original.environment, label: "Old name", systemLabel: "System name" },
+        settings: { environmentName: "Itamar-MacBookPro-M5" },
+      } as ServerConfig;
+      h.registry.set(h.configs(FIRST), named);
+      expect(h.registry.get(h.identitiesAtom)[0]?.label).toBe("Itamar-MacBookPro-M5");
+      expect(h.registry.get(h.full.presentationsAtom).get(FIRST)?.entry.target.label).toBe(
+        "Itamar-MacBookPro-M5",
+      );
+      expect(h.registry.get(h.environmentsAtom)[0]?.environmentLabel).toBe("Itamar-MacBookPro-M5");
+      h.registry.set(h.configs(FIRST), {
+        ...named,
+        settings: { ...named.settings, environmentName: null },
+      });
+      expect(h.registry.get(h.identitiesAtom)[0]?.label).toBe("System name");
+      expect(h.registry.get(h.environmentsAtom)[0]?.environmentLabel).toBe("System name");
+    } finally {
+      h.registry.dispose();
+    }
+  });
+
   it("publishes full config updates without notifying membership, labels, connections or capability consumers", () => {
     const h = harness();
     h.registry.get(h.full.presentationsAtom);
