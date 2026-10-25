@@ -80,6 +80,7 @@ catalogs:
       version: 11.0.5
 
 overrides:
+  node-pty: 1.2.0-beta.15
   '@exodus/bytes>@noble/hashes': 1.8.0
   '@react-navigation/core': 7.21.13
   dbus-next>usocket: '-'
@@ -682,7 +683,7 @@ importers:
         specifier: 'catalog:'
         version: 6.2.2
       node-pty:
-        specifier: ^1.2.0-beta.15
+        specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15(patch_hash=f2fe901c61cde17986240002d05c172d5d0272d83ffaab8d0ebeb922763be414)
       playwright-core:
         specifier: 1.60.0

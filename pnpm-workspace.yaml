@@ -193,6 +193,9 @@ minimumReleaseAgeExclude:
   - "@muse-code/sdk@1.4.6"
 
 overrides:
+  # Desktop packaging installs without a lockfile; keep node-pty on its patched version.
+  # Move this with patches/node-pty@*.patch.
+  node-pty: 1.2.0-beta.15
   # Keep jsdom's optional peer consistent so Vite+ has one test-runner instance.
   "@exodus/bytes>@noble/hashes": "1.8.0"
   # Earlier React Navigation declarations create a circular type alias in TypeScript 7.
