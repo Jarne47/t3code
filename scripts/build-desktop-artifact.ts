@@ -100,6 +100,8 @@ const StageWorkspaceConfig = Schema.Struct({
     ),
   ),
   nodeLinker: Schema.optional(Schema.Literals(["hoisted"])),
+  // A user-level global virtual store makes staged installs copy unpatched packages (pnpm 12).
+  enableGlobalVirtualStore: Schema.Literal(false),
 });
 type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 
@@ -1599,6 +1601,7 @@ export function createStageWorkspaceConfig(input: {
       : {}),
     ...(overrides && Object.keys(overrides).length > 0 ? { overrides } : {}),
     packageExtensions: STAGE_PACKAGE_EXTENSIONS,
+    enableGlobalVirtualStore: false,
   };
 }
 

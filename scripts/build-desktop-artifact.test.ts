@@ -28,6 +28,7 @@ import {
   parseWslRuntimeArchiveMembers,
   readWorkspaceConfig,
   createBuildConfig,
+  createStageWorkspaceConfig,
   DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -212,6 +213,12 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it("keeps staged installs out of a user-level global virtual store", () => {
+    // With the global virtual store on, pnpm 12 stages unpatched fff-node, which cannot load its DLL from server.asar.
+    const config = createStageWorkspaceConfig({ platform: "win", arch: "x64" });
+    assert.equal(config.enableGlobalVirtualStore, false);
+  });
+
   it.effect("rejects overlapping builds from another process until restoration finishes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
