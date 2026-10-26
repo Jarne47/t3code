@@ -4,6 +4,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
   | "filter-by-project"
+  | "hide-project"
   | "project-settings"
   | "pin"
   | "unpin"
@@ -71,6 +72,8 @@ export interface ThreadActionMenuState {
     readonly label: string;
     readonly isActive: boolean;
   } | null;
+  /** Label naming the project (and its environment when remote) this client can hide. */
+  readonly hideProjectLabel: string | null;
   readonly isPinned: boolean;
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
@@ -95,6 +98,7 @@ export interface ThreadActionMenuState {
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
     "new-thread-on-branch",
+    "hide-project",
     "project-settings",
     "mark-unread",
     "share-guest",
@@ -174,6 +178,15 @@ export function buildThreadActionMenuItems(
               ? "Show all projects"
               : `Filter by ${state.projectFilter.label}`,
             icon: "folder-tree",
+          },
+        ]
+      : []),
+    ...(state.hideProjectLabel
+      ? [
+          {
+            id: "hide-project" as const,
+            label: `Hide ${state.hideProjectLabel}`,
+            icon: "eye-off",
           },
         ]
       : []),

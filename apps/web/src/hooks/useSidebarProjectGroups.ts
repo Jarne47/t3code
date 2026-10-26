@@ -7,7 +7,14 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import { useClientSettings } from "./useSettings";
 
 export function useSidebarProjectGroups() {
-  const projects = useProjects();
+  const allProjects = useProjects();
+  const hiddenProjects = useClientSettings((s) => s.sidebarHiddenProjects);
+  const projects =
+    hiddenProjects.length === 0
+      ? allProjects
+      : allProjects.filter(
+          (project) => !hiddenProjects.includes(`${project.environmentId}:${project.id}`),
+        );
   // Activity order lags a running thread's streaming ticks until its next
   // real change; reading every tick re-rendered the whole sidebar with it.
   const threads = useQuietThreadShells();
