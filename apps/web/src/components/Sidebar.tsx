@@ -115,7 +115,7 @@ import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { getClientSettings, updateClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -375,7 +375,14 @@ function useSidebarThreads(input: {
     routeThreadRef,
     activeSort,
   } = input;
-  const threads = useQuietThreadShells();
+  const allThreads = useQuietThreadShells();
+  const hiddenProjects = useClientSettings((s) => s.sidebarHiddenProjects);
+  const threads =
+    hiddenProjects.length === 0
+      ? allThreads
+      : allThreads.filter(
+          (thread) => !hiddenProjects.includes(`${thread.environmentId}:${thread.projectId}`),
+        );
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -2386,6 +2393,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 projectRef.projectId === thread.projectId,
             ),
           ) ?? null;
+        const hiddenProjectKey = `${thread.environmentId}:${thread.projectId}`;
+        const hiddenProjectName =
+          projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.title ??
+          threadProjectGroup?.displayName ??
+          null;
+        const hiddenProjectEnvironmentLabel =
+          thread.environmentId === primaryEnvironmentId
+            ? null
+            : (environmentLabelById.get(thread.environmentId) ?? null);
+        const hideProjectLabel =
+          hiddenProjectName === null
+            ? null
+            : hiddenProjectEnvironmentLabel === null
+              ? hiddenProjectName
+              : `${hiddenProjectName} on ${hiddenProjectEnvironmentLabel}`;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
@@ -2400,6 +2422,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     isActive: projectScopeKey === threadProjectGroup.projectKey,
                   }
                 : null,
+              hideProjectLabel,
               isPinned,
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
@@ -2442,6 +2465,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               );
             }
             return;
+          case "hide-project": {
+            const hidden = getClientSettings().sidebarHiddenProjects;
+            if (hidden.includes(hiddenProjectKey)) return;
+            if (projectScopeKey === threadProjectGroup?.projectKey) setProjectScopeKey(null);
+            void updateClientSettings({ sidebarHiddenProjects: [...hidden, hiddenProjectKey] });
+            toastManager.add(
+              stackedThreadToast({
+                type: "success",
+                title: `Hid ${hideProjectLabel ?? "project"}`,
+                description: "Unhide it in Settings → General.",
+                actionProps: {
+                  children: "Undo",
+                  onClick: () =>
+                    void updateClientSettings({
+                      sidebarHiddenProjects: getClientSettings().sidebarHiddenProjects.filter(
+                        (key) => key !== hiddenProjectKey,
+                      ),
+                    }),
+                },
+              }),
+            );
+            return;
+          }
           case "project-settings":
             if (threadProjectGroup)
               openProjectSettings(threadProjectGroup, {

@@ -6,6 +6,7 @@ const baseState: ThreadActionMenuState = {
   canOperate: true,
   branch: null,
   projectFilter: null,
+  hideProjectLabel: null,
   isPinned: false,
   isSettled: false,
   autoSettleEnabled: true,
@@ -70,5 +71,15 @@ describe("buildThreadActionMenuItems", () => {
       (item) => item.id === "archive",
     );
     expect(archiveItem?.disabled).toBe(true);
+  });
+
+  it("keeps hiding a project available to read-only connections", () => {
+    const hideItem = buildThreadActionMenuItems({
+      ...baseState,
+      canOperate: false,
+      hideProjectLabel: "android-adb-tests on Lab Mac",
+    }).find((item) => item.id === "hide-project");
+    expect(hideItem).toMatchObject({ label: "Hide android-adb-tests on Lab Mac" });
+    expect(hideItem?.disabled).toBeUndefined();
   });
 });

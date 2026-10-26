@@ -468,6 +468,10 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarActiveProjectOrder: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  // `${environmentId}:${projectId}` keys this client leaves out of the sidebar and notifications.
+  sidebarHiddenProjects: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_SORT_ORDER)),
   ),
@@ -1695,6 +1699,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarGroupActiveThreads: Schema.optionalKey(Schema.Boolean),
   sidebarRecentProjectsFirst: Schema.optionalKey(Schema.Boolean),
   sidebarActiveProjectOrder: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  sidebarHiddenProjects: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),

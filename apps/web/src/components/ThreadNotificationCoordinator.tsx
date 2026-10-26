@@ -114,6 +114,7 @@ function EnvironmentNotifications({
   const inAppNotificationsEnabled = useClientSettings(
     (settings) => settings.inAppNotificationsEnabled,
   );
+  const hiddenProjects = useClientSettings((settings) => settings.sidebarHiddenProjects);
   const navigate = useNavigate();
   const { environmentId: activeEnvironmentId, threadId: activeThreadId } = useParams({
     strict: false,
@@ -129,6 +130,7 @@ function EnvironmentNotifications({
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     for (const rawThread of threads) {
       if (rawThread.lineage.relationshipToParent === "subagent") continue;
+      if (hiddenProjects.includes(`${environmentId}:${rawThread.projectId}`)) continue;
       const prior = previous.current.get(rawThread.id);
       const subagentRequest = subagentRequests.get(rawThread.id) ?? null;
       if (prior?.raw === rawThread && prior.subagentRequest === subagentRequest) {
@@ -250,6 +252,7 @@ function EnvironmentNotifications({
     activeEnvironmentId,
     activeThreadId,
     environmentId,
+    hiddenProjects,
     inAppNotificationsEnabled,
     mode,
     navigate,
