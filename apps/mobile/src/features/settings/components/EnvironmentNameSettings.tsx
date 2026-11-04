@@ -30,15 +30,11 @@ export function EnvironmentNameSettings({
   const save = async () => {
     if (disabled || !changed) return;
     setSaving(true);
-    try {
-      const result = await updateSettings({
-        environmentId,
-        input: { patch: { environmentName: value.trim() || null } },
-      });
-      if (result._tag === "Success") setDraft(null);
-    } finally {
-      setSaving(false);
-    }
+    const result = await updateSettings({
+      environmentId,
+      input: { patch: { environmentName: value.trim() || null } },
+    }).finally(() => setSaving(false));
+    if (result._tag === "Success") setDraft(null);
   };
 
   return (
