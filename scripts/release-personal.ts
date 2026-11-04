@@ -35,7 +35,7 @@ const RELEASE_TESTS = [
     "apps/web/src/cloud/linkEnvironment.test.ts",
   ],
   [
-    "apps/web/src/components/sidebar/ActiveProjectGroups.test.tsx",
+    "apps/web/src/components/sidebar/activeThreadSort.test.ts",
     "apps/server/src/provider/providerMaintenanceRunner.test.ts",
     "apps/desktop/src/app/DesktopUserData.test.ts",
   ],

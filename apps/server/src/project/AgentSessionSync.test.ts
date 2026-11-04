@@ -12,7 +12,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -167,8 +166,7 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
       const events: OrchestrationV2DomainEvent[] = [];
       const detached: string[] = [];
       const store = Layer.mock(ProjectStore.ProjectStoreV2)({
-        get: () =>
-          Effect.succeed(Option.some({ id: projectId, workspaceRoot: "/project" } as never)),
+        get: () => Effect.succeedSome({ id: projectId, workspaceRoot: "/project" } as never),
       });
       const scanner = AgentSessionScanner.layer.pipe(
         Layer.provide(
@@ -187,6 +185,7 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
         ),
       );
       const dependencies = Layer.mergeAll(
+        ServerSettings.layerTest(),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getNativeThreadBindings: () => Effect.succeed([]),
         }),
@@ -195,7 +194,8 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
         IdAllocator.layer,
         ThreadCommandExecutor.layer,
         Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
-          getByThreadId: () => Effect.succeed(Option.none()),
+          getByThreadId: () => Effect.succeedNone,
+          upsert: () => Effect.void,
           recordImportedTranscript: () => Effect.void,
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({

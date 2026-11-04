@@ -74,6 +74,7 @@ export function useFavoriteModelShortcut(input: {
     });
   })();
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Holds the window keydown listener for favorite model shortcuts while enabled.
   useEffect(() => {
     if (!enabled) return;
     const handler = (event: KeyboardEvent) => {

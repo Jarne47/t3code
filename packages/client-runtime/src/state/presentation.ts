@@ -12,7 +12,7 @@ import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
 import {
   connectionCatalogDisplayUrl,
-  presentEnvironmentConnection,
+  presentConnectionState,
   type EnvironmentConnectionPhase,
   type EnvironmentConnectionPresentation,
   type EnvironmentPresentation,
@@ -82,15 +82,18 @@ export function createEnvironmentPresentationAtoms<E>(input: {
       if (entry === undefined) {
         return null;
       }
-      const state = Option.getOrElse(
-        AsyncResult.value(get(input.stateAtom(environmentId))),
+      const state = AsyncResult.getOrElse(
+        get(input.stateAtom(environmentId)),
         () => AVAILABLE_CONNECTION_STATE,
       );
       const previous = Option.getOrNull(get.self<EnvironmentPresentation | null>());
+      // The supervisor never publishes this placeholder; an enabled one starts out connecting.
       const connection: EnvironmentConnectionPresentation =
-        entry.unsupportedReason === undefined
-          ? presentEnvironmentConnection(state)
-          : { phase: "unsupported", error: entry.unsupportedReason, traceId: null };
+        entry.unsupportedReason !== undefined
+          ? { phase: "unsupported", error: entry.unsupportedReason, traceId: null }
+          : state === AVAILABLE_CONNECTION_STATE && entry.enabled
+            ? { phase: "connecting", error: null, traceId: null }
+            : presentConnectionState(state);
       const serverConfig = withoutProviders(
         get(input.serverConfigValueAtom(environmentId)),
         previous?.serverConfig ?? null,
@@ -334,8 +337,7 @@ export function createEnvironmentSummaryAtoms(input: {
   const pullRequestsSupportedAtom = Atom.make((get) =>
     get(environmentIdsAtom).some(
       (environmentId) =>
-        get(input.presentationAtom(environmentId))?.serverConfig?.environment.capabilities
-          .pullRequests === true,
+        (get(input.presentationAtom(environmentId))?.serverConfig ?? null) !== null,
     ),
   );
   return {

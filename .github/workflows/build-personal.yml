@@ -154,7 +154,7 @@ jobs:
           set -euo pipefail
           vp test run apps/desktop/src/updates/PersonalUpdater.test.ts apps/desktop/src/updates/personalInstall.test.ts apps/desktop/src/updates/DesktopUpdates.test.ts apps/desktop/src/electron/ElectronUpdater.test.ts apps/web/src/components/desktopUpdate.logic.test.ts
           vp test run scripts/lib/public-config.test.ts apps/web/src/cloud/publicConfig.test.ts apps/web/src/cloud/linkEnvironment.test.ts
-          vp test run apps/web/src/components/sidebar/ActiveProjectGroups.test.tsx apps/web/src/components/ProviderUpdateEnvironmentRows.test.tsx apps/server/src/provider/providerMaintenance.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts apps/desktop/src/app/DesktopUserData.test.ts
+          vp test run apps/web/src/components/sidebar/activeThreadSort.test.ts apps/web/src/components/ProviderUpdateEnvironmentRows.test.tsx apps/server/src/provider/providerMaintenance.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts apps/desktop/src/app/DesktopUserData.test.ts
           node scripts/update-release-package-versions.ts "$BUILD_VERSION"
           args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$BUILD_VERSION" --output-dir release/personal --verbose)
           if [[ "$BUILD_PLATFORM" == win ]]; then

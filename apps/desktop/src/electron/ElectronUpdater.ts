@@ -102,47 +102,57 @@ type UpdaterDriver = Pick<
 
 const makeUpdaterService = (getUpdater: () => UpdaterDriver) =>
   ElectronUpdater.of({
-    setFeedURL: (options) =>
-      Effect.suspend(() => {
+    setFeedURL: Effect.fn("ElectronUpdater.setFeedURL")(function (options) {
+      return Effect.suspend(() => {
         getUpdater().setFeedURL(options);
         return Effect.void;
-      }),
-    setAutoDownload: (value) =>
-      Effect.suspend(() => {
+      });
+    }),
+    setAutoDownload: Effect.fn("ElectronUpdater.setAutoDownload")(function (value) {
+      return Effect.suspend(() => {
         getUpdater().autoDownload = value;
         return Effect.void;
-      }),
-    setAutoInstallOnAppQuit: (value) =>
-      Effect.suspend(() => {
+      });
+    }),
+    setAutoInstallOnAppQuit: Effect.fn("ElectronUpdater.setAutoInstallOnAppQuit")(function (value) {
+      return Effect.suspend(() => {
         getUpdater().autoInstallOnAppQuit = value;
         return Effect.void;
-      }),
-    setChannel: (channel) =>
-      Effect.suspend(() => {
+      });
+    }),
+    setChannel: Effect.fn("ElectronUpdater.setChannel")(function (channel) {
+      return Effect.suspend(() => {
         getUpdater().channel = channel;
         return Effect.void;
-      }),
-    setAllowPrerelease: (value) =>
-      Effect.suspend(() => {
+      });
+    }),
+    setAllowPrerelease: Effect.fn("ElectronUpdater.setAllowPrerelease")(function (value) {
+      return Effect.suspend(() => {
         getUpdater().allowPrerelease = value;
         return Effect.void;
-      }),
+      });
+    }),
     allowDowngrade: Effect.sync(() => getUpdater().allowDowngrade),
-    setAllowDowngrade: (value) =>
-      Effect.suspend(() => {
+    setAllowDowngrade: Effect.fn("ElectronUpdater.setAllowDowngrade")(function (value) {
+      return Effect.suspend(() => {
         getUpdater().allowDowngrade = value;
         return Effect.void;
-      }),
-    setFullChangelog: (value) =>
-      Effect.suspend(() => {
+      });
+    }),
+    setFullChangelog: Effect.fn("ElectronUpdater.setFullChangelog")(function (value) {
+      return Effect.suspend(() => {
         getUpdater().fullChangelog = value;
         return Effect.void;
-      }),
-    setDisableDifferentialDownload: (value) =>
-      Effect.suspend(() => {
-        getUpdater().disableDifferentialDownload = value;
-        return Effect.void;
-      }),
+      });
+    }),
+    setDisableDifferentialDownload: Effect.fn("ElectronUpdater.setDisableDifferentialDownload")(
+      function (value) {
+        return Effect.suspend(() => {
+          getUpdater().disableDifferentialDownload = value;
+          return Effect.void;
+        });
+      },
+    ),
     checkForUpdates: Effect.suspend(() => {
       const channel = getUpdater().channel;
       return Effect.tryPromise({
@@ -157,8 +167,11 @@ const makeUpdaterService = (getUpdater: () => UpdaterDriver) =>
         catch: (cause) => new ElectronUpdaterDownloadUpdateError({ channel, cause }),
       }).pipe(Effect.asVoid);
     }),
-    quitAndInstall: ({ isSilent, isForceRunAfter }) =>
-      Effect.suspend(() => {
+    quitAndInstall: Effect.fn("ElectronUpdater.quitAndInstall")(function ({
+      isSilent,
+      isForceRunAfter,
+    }) {
+      return Effect.suspend(() => {
         const channel = getUpdater().channel;
         return Effect.tryPromise({
           try: async () => {
@@ -172,8 +185,9 @@ const makeUpdaterService = (getUpdater: () => UpdaterDriver) =>
               cause,
             }),
         });
-      }),
-    on: (eventName, listener) => {
+      });
+    }),
+    on: Effect.fn("ElectronUpdater.on")(function (eventName, listener) {
       const eventTarget = getUpdater() as unknown as {
         on: (eventName: string, listener: (...args: Array<unknown>) => void) => void;
         removeListener: (eventName: string, listener: (...args: Array<unknown>) => void) => void;
@@ -188,7 +202,7 @@ const makeUpdaterService = (getUpdater: () => UpdaterDriver) =>
             eventTarget.removeListener(eventName, untypedListener);
           }),
       ).pipe(Effect.asVoid);
-    },
+    }),
   });
 
 /** @public */
