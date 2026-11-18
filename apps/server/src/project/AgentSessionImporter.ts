@@ -914,6 +914,14 @@ const make = Effect.gen(function* () {
               nativeId,
               refreshedSources.get(threadId),
             );
+      // A T3-started thread without a readable rollout has no outside history to bring in.
+      if (
+        outcome?._tag === "Skipped" &&
+        !threadId.startsWith("import:") &&
+        provider?.nativeMetadata?.sharedHistory !== true
+      ) {
+        return;
+      }
       const result = yield* syncRecentAgentThreads(
         { projectId: shell.projectId },
         {
