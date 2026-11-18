@@ -73,15 +73,15 @@ With a clean working tree on `main`:
 ./scripts/fork-update.sh
 ```
 
-This merges upstream `main`, installs locked dependencies, runs focused checks, and builds the web client. You can supply an upstream release tag instead of `main`. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
+This merges the newest upstream nightly tag (`v*-nightly.*`), installs locked dependencies, runs focused checks, and builds the web client. Nightlies are commits upstream's release workflow has already built and packaged, which matters because this fork has no CI. To take a specific fix before it reaches a nightly, pass an upstream ref such as `main` or a release tag. A tag older than your current base does not downgrade the fork. On a conflict, resolve it and run `./scripts/fork-check.sh`, or cancel with `git merge --abort`. A failed check stops the update before the build.
 
 The command first fast-forwards from the personal fork to pick up weekly maintenance, then merges upstream. If your local branch has diverged, it stops for manual reconciliation. It does not push, install, or deploy. Push the verified branch with `git push origin HEAD`. Official desktop updates replace the official application; they do not preserve this fork's changes. The personal package uses its own release updater, so official updates cannot replace the customizations.
 
-## Weekly maintenance on this Mac
+## Scheduled maintenance on this Mac
 
-The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays at 09:00 in the Mac's local time. It fetches `official/main`, merges into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `origin/main`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
+The LaunchAgent `com.itamar.t3code-weekly-maintenance` runs Sundays and Wednesdays at 09:00 in the Mac's local time. It merges the newest upstream nightly tag into the latest personal fork in a disposable worktree, installs locked dependencies, runs `fork-check.sh`, and builds the web client. Only successful updates are pushed to `origin/main`; conflicts or failed checks stop the run. No force pushes, desktop installation, restarts, or writes to app history occur. The working checkout is left untouched; run `fork-update.sh` before building the next desktop version.
 
-Latest results and command output are in `~/Library/Application Support/t3code-maintenance/latest.json` and `latest.log`. macOS notifications are attempted when updates succeed or need attention, subject to notification settings. The task requires this Mac and your logged-in session; a scheduled run missed during sleep runs on wake, while one missed during shutdown waits for the next Sunday. No changes means no dependency install or tests are needed.
+Latest results and command output are in `~/Library/Application Support/t3code-maintenance/latest.json` and `latest.log`. A successful update shows a macOS notification. A failed one opens an alert that stays on screen until dismissed and can reveal the log; resolve it with `fork-update.sh` on a branch. The task requires this Mac and your logged-in session; a scheduled run missed during sleep runs on wake, while one missed during shutdown waits for the next Sunday. No changes means no dependency install or tests are needed.
 
 Run now or disable the schedule:
 

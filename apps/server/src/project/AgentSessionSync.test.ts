@@ -20,6 +20,7 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
@@ -168,10 +169,17 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
       const store = Layer.mock(ProjectStore.ProjectStoreV2)({
         get: () => Effect.succeedSome({ id: projectId, workspaceRoot: "/project" } as never),
       });
+      const runtimes = Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+        getByThreadId: () => Effect.succeedNone,
+        list: () => Effect.succeed([]),
+        upsert: () => Effect.void,
+        recordImportedTranscript: () => Effect.void,
+      });
       const scanner = AgentSessionScanner.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
             store,
+            runtimes,
             ServerSettings.layerTest({
               providerInstances: {
                 [instanceId]: {
@@ -193,11 +201,8 @@ it.effect.each(["native-t3-chat", "import:codex:retired-original-session"])(
         store,
         IdAllocator.layer,
         ThreadCommandExecutor.layer,
-        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
-          getByThreadId: () => Effect.succeedNone,
-          upsert: () => Effect.void,
-          recordImportedTranscript: () => Effect.void,
-        }),
+        runtimes,
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           detach: (input) =>
             Effect.sync(() => {

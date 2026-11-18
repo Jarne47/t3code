@@ -10,6 +10,18 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+NIGHTLY_TAG_PATTERN = "v*-nightly.*"
+FAILURE_ALERT = """
+set choice to button returned of (display alert "T3 fork update needs attention" message "The scheduled upstream merge stopped. Nothing was pushed." buttons {"Show log", "OK"} default button "Show log")
+if choice is "Show log" then do shell script "open -R " & quoted form of (item 1 of argv)
+"""
+
+
+def show_failure_alert(log_path):
+    """A banner was missed once; an alert stays on screen until dismissed. Not awaited."""
+    subprocess.Popen(["/usr/bin/osascript", "-e", "on run argv", "-e", FAILURE_ALERT, "-e", "end run", str(log_path)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
 
 def maintain(repo, state):
     state.mkdir(parents=True, exist_ok=True)
@@ -37,12 +49,15 @@ def maintain(repo, state):
             try:
                 branch = "main"
                 personal_ref = f"refs/remotes/origin/{branch}"
-                upstream_ref = "refs/remotes/official/main"
                 run("git", "fetch", "origin", f"refs/heads/{branch}:{personal_ref}")
                 base = run("git", "rev-parse", personal_ref, capture=True)
-                run("git", "fetch", "official", f"refs/heads/main:{upstream_ref}")
-                upstream = run("git", "rev-parse", upstream_ref, capture=True)
-                result.update(base=base, upstream=upstream)
+                # Nightly tags are commits upstream's release workflow already built and packaged.
+                run("git", "fetch", "--no-tags", "official", "+refs/tags/v*:refs/tags/v*")
+                upstream_tag = run("git", "tag", "--list", NIGHTLY_TAG_PATTERN, "--sort=-v:refname", capture=True).split("\n")[0]
+                if not upstream_tag:
+                    raise RuntimeError("No upstream nightly tags found.")
+                upstream = run("git", "rev-parse", f"{upstream_tag}^{{commit}}", capture=True)
+                result.update(base=base, upstream=upstream, upstream_tag=upstream_tag)
                 pending = run("git", "rev-list", "--count", f"{base}..{upstream}", capture=True)
                 if pending == "0":
                     result.update(status="up-to-date", message="No new upstream commits. Installed app unchanged.")
@@ -72,9 +87,11 @@ def maintain(repo, state):
         report.write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
         if result["status"] in ("updated", "failed") and Path("/usr/bin/osascript").exists():
-            message = "Updates verified and synced. Desktop installation is ready to prepare." if result["status"] == "updated" else "Weekly update needs attention. See the maintenance status report."
             try:
-                subprocess.run(["/usr/bin/osascript", "-e", f'display notification "{message}" with title "T3 fork maintenance"'], check=False, timeout=15)
+                if result["status"] == "updated":
+                    subprocess.run(["/usr/bin/osascript", "-e", 'display notification "Updates verified and synced. Desktop installation is ready to prepare." with title "T3 fork maintenance"'], check=False, timeout=15)
+                else:
+                    show_failure_alert(state / "latest.log")
             except (OSError, subprocess.TimeoutExpired):
                 pass  # The durable report remains available when notifications cannot be shown.
         return 1 if result["status"] == "failed" else 0

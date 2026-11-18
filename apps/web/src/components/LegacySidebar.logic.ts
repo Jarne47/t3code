@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 // Helpers only the fork's legacy project tree uses; upstream removed that sidebar and these with it.
 import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
 import type { SidebarProjectSortOrder } from "@t3tools/contracts/settings";
@@ -10,16 +11,17 @@ import { sortProjectsByActivity, type ThreadStatusPill } from "./Sidebar.logic";
 
 const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
-const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 5,
-  "Awaiting Input": 4,
-  "Guest Request": 3.75,
-  Failed: 3.5,
-  Working: 3,
-  Connecting: 3,
-  Waiting: 2.5,
-  "Plan Ready": 2,
-  Completed: 1,
+// Status labels are msg() strings, so key by the same messages.
+const THREAD_STATUS_PRIORITY: Record<string, number> = {
+  [msg("Pending Approval")]: 5,
+  [msg("Awaiting Input")]: 4,
+  [msg("Guest Request")]: 3.75,
+  [msg("Failed")]: 3.5,
+  [msg("Working")]: 3,
+  [msg("Connecting")]: 3,
+  [msg("Waiting")]: 2.5,
+  [msg("Plan Ready")]: 2,
+  [msg("Completed")]: 1,
 };
 
 export function isWslConnectionTarget(target: ConnectionTarget): boolean {
@@ -98,7 +100,8 @@ export function resolveProjectStatusIndicator(
     if (status === null) continue;
     if (
       highestPriorityStatus === null ||
-      THREAD_STATUS_PRIORITY[status.label] > THREAD_STATUS_PRIORITY[highestPriorityStatus.label]
+      (THREAD_STATUS_PRIORITY[status.label] ?? 0) >
+        (THREAD_STATUS_PRIORITY[highestPriorityStatus.label] ?? 0)
     ) {
       highestPriorityStatus = status;
     }

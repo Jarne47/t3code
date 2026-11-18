@@ -3,9 +3,10 @@ import { useEnvironmentIdentities } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { Button } from "../ui/button";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 export function HiddenProjectsSettingsRow() {
+  const searchableSetting = useSearchableSetting();
   const hiddenProjects = useClientSettings((s) => s.sidebarHiddenProjects);
   const projects = useProjects();
   const environments = useEnvironmentIdentities();

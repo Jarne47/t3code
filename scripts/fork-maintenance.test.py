@@ -38,6 +38,10 @@ class MaintenanceTest(unittest.TestCase):
         self.git('branch', 'upstream-fixture')
         self.git('push', 'origin', self.branch)
         self.git('push', 'official', 'main')
+        self.nightly = 0
+        self.git('tag', '-a', 'v0.0.1-nightly.20260101.0', '-m', 'base nightly')
+        self.git('push', 'official', 'v0.0.1-nightly.20260101.0')
+        self.git('tag', '-d', 'v0.0.1-nightly.20260101.0')
         self.binary = self.root / 'bin'
         self.binary.mkdir()
         vp = self.binary / 'vp'
@@ -61,6 +65,11 @@ class MaintenanceTest(unittest.TestCase):
             (self.repo / 'fail-check').touch()
         self.commit('upstream change')
         self.git('push', 'official', 'HEAD:main')
+        self.nightly += 1
+        tag = f'v0.0.1-nightly.20260101.{self.nightly}'
+        self.git('tag', '-a', tag, '-m', tag)
+        self.git('push', 'official', tag)
+        self.git('tag', '-d', tag)
         self.git('checkout', self.branch)
 
     def run_maintenance(self):
@@ -68,7 +77,9 @@ class MaintenanceTest(unittest.TestCase):
             if args[0][0] == '/usr/bin/osascript':
                 return subprocess.CompletedProcess(args[0], 0)
             return real_run(*args, **kwargs)
-        with patch.dict(os.environ, {'PATH': str(self.binary) + ':' + os.environ['PATH']}), patch.object(subprocess, 'run', run), contextlib.redirect_stdout(io.StringIO()):
+        self.alerts = []
+        with patch.dict(os.environ, {'PATH': str(self.binary) + ':' + os.environ['PATH']}), patch.object(subprocess, 'run', run), \
+                patch.object(maintenance, 'show_failure_alert', self.alerts.append), contextlib.redirect_stdout(io.StringIO()):
             code = maintenance.maintain(self.repo, self.state)
         return code, json.loads((self.state / 'latest.json').read_text())
 
@@ -90,10 +101,25 @@ class MaintenanceTest(unittest.TestCase):
         self.assertEqual((self.repo / 'content').read_text(), 'uncommitted work\n')
         self.assertEqual(len(self.git('worktree', 'list').splitlines()), 1)
 
+    def test_merges_newest_nightly_not_main(self):
+        self.advance_upstream()
+        nightly = self.command('git', '--git-dir', str(self.root / 'official'), 'rev-parse', 'v0.0.1-nightly.20260101.1^{commit}')
+        # A main commit without a nightly tag is not merged yet.
+        self.git('checkout', 'upstream-fixture')
+        (self.repo / 'untagged').write_text('main only\n')
+        self.commit('untagged main commit')
+        self.git('push', 'official', 'HEAD:main')
+        self.git('checkout', self.branch)
+        code, result = self.run_maintenance()
+        self.assertEqual((code, result['status'], result['upstream']), (0, 'updated', nightly))
+        self.assertEqual(result['upstream_tag'], 'v0.0.1-nightly.20260101.1')
+        self.assertEqual(self.git('ls-tree', '--name-only', result['revision'], 'untagged'), '')
+
     def test_failed_check_does_not_push(self):
         self.advance_upstream(fail=True)
         code, result = self.run_maintenance()
         self.assertEqual((code, result['status']), (1, 'failed'))
+        self.assertEqual(len(self.alerts), 1)
         self.assertEqual(self.remote_tip(), self.base)
         self.assertEqual(len(self.git('worktree', 'list').splitlines()), 1)
 

@@ -1,3 +1,4 @@
+import { m } from "../../i18n/messages";
 import { useId, useState, type ReactNode } from "react";
 import {
   closestCenter,
@@ -92,7 +93,7 @@ function SortableProjectGroup({
           aria-expanded={expanded}
           aria-controls={listId}
           aria-label={`${expanded ? "Collapse" : "Expand"} project ${group.label}${
-            status ? `, ${status.label}` : ""
+            status ? `, ${m(status.label)}` : ""
           }`}
           onClick={() => setProjectExpanded(group.key, !expanded)}
           className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring"
@@ -111,7 +112,7 @@ function SortableProjectGroup({
           {statusKind !== null && status !== null ? (
             <span className={cn("inline-flex shrink-0 items-center gap-1", status.className)}>
               <SidebarV2StatusIcon kind={statusKind} className="size-3.5 shrink-0" />
-              {status.label}
+              {m(status.label)}
             </span>
           ) : null}
           <span className="tabular-nums">{group.children.length}</span>

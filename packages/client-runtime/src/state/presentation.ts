@@ -1,3 +1,4 @@
+import type { MarkedText } from "../errors/translatable.ts";
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentMachineKind,
@@ -38,6 +39,10 @@ function sameConnection(
   right: EnvironmentConnectionPresentation,
 ): boolean {
   return left.phase === right.phase && left.error === right.error && left.traceId === right.traceId;
+}
+
+function sameRouteIds(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  return left.length === right.length && left.every((routeId, index) => right[index] === routeId);
 }
 
 function withoutProviders(
@@ -121,11 +126,16 @@ export function createEnvironmentPresentationAtoms<E>(input: {
             ? previous.connection
             : connection,
         serverConfig,
+        refusedRouteIds:
+          previous !== null && sameRouteIds(previous.refusedRouteIds, state.refusedRouteIds)
+            ? previous.refusedRouteIds
+            : state.refusedRouteIds,
       } satisfies EnvironmentPresentation;
       return previous !== null &&
         previous.entry === next.entry &&
         previous.connection === next.connection &&
-        previous.serverConfig === next.serverConfig
+        previous.serverConfig === next.serverConfig &&
+        previous.refusedRouteIds === next.refusedRouteIds
         ? previous
         : next;
     }).pipe(Atom.withLabel(`environment-presentation:${environmentId}`));
@@ -195,6 +205,7 @@ export function createEnvironmentPresentationAtoms<E>(input: {
         prior !== undefined &&
           prior.entry === presentation.entry &&
           prior.connection === presentation.connection &&
+          prior.refusedRouteIds === presentation.refusedRouteIds &&
           prior.serverConfig === serverConfig
           ? prior
           : { ...presentation, serverConfig },
@@ -220,6 +231,8 @@ export interface EnvironmentConnectionSummary {
   readonly isEnabled: boolean;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
+  /** `connectionError` as marked text; display sites resolve it with `resolveMarkedText`. */
+  readonly i18nConnectionError?: MarkedText;
   readonly connectionErrorTraceId: string | null;
 }
 
@@ -235,6 +248,9 @@ export function projectEnvironmentConnectionSummary(
     isEnabled: environment.entry.enabled,
     connectionState: environment.connection.phase,
     connectionError: environment.connection.error,
+    ...(environment.connection.i18nError === undefined
+      ? {}
+      : { i18nConnectionError: environment.connection.i18nError }),
     connectionErrorTraceId: environment.connection.traceId,
   };
 }
@@ -340,6 +356,13 @@ export function createEnvironmentSummaryAtoms(input: {
         (get(input.presentationAtom(environmentId))?.serverConfig ?? null) !== null,
     ),
   );
+  const issuesSupportedAtom = Atom.make((get) =>
+    get(environmentIdsAtom).some(
+      (environmentId) =>
+        get(input.presentationAtom(environmentId))?.serverConfig?.environment.capabilities
+          .issues === true,
+    ),
+  );
   return {
     environmentIdsAtom,
     connectedEnvironmentIdsAtom,
@@ -347,5 +370,6 @@ export function createEnvironmentSummaryAtoms(input: {
     environmentsAtom,
     machineByIdAtom,
     pullRequestsSupportedAtom,
+    issuesSupportedAtom,
   };
 }
