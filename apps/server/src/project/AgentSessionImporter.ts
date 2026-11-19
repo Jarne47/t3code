@@ -21,6 +21,7 @@ import {
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
@@ -115,6 +116,25 @@ export class AgentSessionThreadRefreshError extends Schema.TaggedError<AgentSess
 }
 
 const isThreadRefreshError = Schema.is(AgentSessionThreadRefreshError);
+
+const SETTLED_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "rolled_back",
+]);
+
+/** Whether T3's own turn or background work still owns the thread, so syncing must wait. */
+function hasUnsettledOwnWork(
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status">>,
+  provider: Pick<OrchestrationV2ProviderThread, "pendingBackgroundTasks"> | undefined,
+): boolean {
+  return (
+    runs.some((run) => !SETTLED_RUN_STATUSES.has(run.status)) ||
+    (provider?.pendingBackgroundTasks?.length ?? 0) > 0
+  );
+}
 // ACP imports read the history while holding the session-mutation lock, and an agent can
 // leave session/resume or initialize unanswered. Longer than session/load's own deadline.
 const NATIVE_HISTORY_READ_TIMEOUT = "2 minutes";
@@ -499,13 +519,7 @@ const make = Effect.gen(function* () {
               activeProvider?.nativeThreadRef?.nativeId === thread.providerSessionId &&
               activeProvider?.providerInstanceId === thread.providerInstanceId;
             // Do not import over an active turn or a thread that has switched its native session.
-            const busy =
-              snapshot.runs.some(
-                (run) =>
-                  !["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(
-                    run.status,
-                  ),
-              ) || (activeProvider?.pendingBackgroundTasks?.length ?? 0) > 0;
+            const busy = hasUnsettledOwnWork(snapshot.runs, activeProvider);
             if (
               snapshot.thread.deletedAt !== null ||
               busy ||
@@ -893,10 +907,12 @@ const make = Effect.gen(function* () {
     function* (threadId: ThreadId, options?: { readonly forReply?: boolean }) {
       const shell = yield* orchestrator.getThreadShell(threadId);
       if (shell === null || shell.activeRunId !== null) return;
-      const records = yield* orchestrator.getThreadRecords(threadId, ["providerThreads"]);
+      const records = yield* orchestrator.getThreadRecords(threadId, ["providerThreads", "runs"]);
       const provider = records.providerThreads.find(
         (candidate) => candidate.id === shell.activeProviderThreadId,
       );
+      // A reply queues or steers behind T3's own unsettled work; a later refresh brings in outside history.
+      if (hasUnsettledOwnWork(records.runs, provider)) return;
       const nativeId =
         provider?.nativeThreadRef?.driver === "codex"
           ? (provider.nativeThreadRef.nativeId ?? undefined)

@@ -369,6 +369,7 @@ it.effect.each(["codex", "claudeAgent"] as const)(
     const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
     const recorded: Array<unknown> = [];
     let hasRun = false;
+    let runStatus: "completed" | "running" = "completed";
     let runtimeStatus: "running" | "stopped" = "stopped";
     let resumeId = nativeId;
     let runtimeInstanceId = instanceId;
@@ -473,7 +474,7 @@ it.effect.each(["codex", "claudeAgent"] as const)(
                 ],
                 providerTurns: [],
                 contextHandoffs: [],
-                runs: hasRun ? [{ status: "completed" }] : [],
+                runs: hasRun ? [{ status: runStatus }] : [],
                 providerThreads: [],
               } as never),
           }),
@@ -542,6 +543,10 @@ it.effect.each(["codex", "claudeAgent"] as const)(
           nativeThreadRef: { driver: "codex", nativeId },
           nativeMetadata: { sharedHistory: true },
         });
+        // T3's own turn has not settled yet, so the reply goes ahead instead of failing as busy.
+        hasRun = true;
+        runStatus = "running";
+        yield* importer.refreshThread(importedId, { forReply: true });
       }
     }).pipe(Effect.provide(testLayer));
   },
