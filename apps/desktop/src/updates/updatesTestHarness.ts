@@ -1,6 +1,10 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import {
+  DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE,
+  DESKTOP_UPDATE_RESTART_MARKER_FILE,
+  type DesktopUpdateState,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
@@ -19,6 +23,10 @@ import * as DesktopUpdatePolicy from "./DesktopUpdatePolicy.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 export const flushCallbacks = Effect.yieldNow;
+
+// Paths come from the host's path module, so Windows runs see backslashes.
+const isMarkerPath = (path: string, file: string) =>
+  path.replaceAll("\\", "/").endsWith(`/${file}`);
 
 export interface UpdatesHarnessOptions {
   readonly checkForUpdates?: Effect.Effect<
@@ -272,7 +280,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         if (isInstallRecord(path)) installRecords.set(path, data);
         else {
-          if (path.endsWith("/desktop-update-restart")) updateRestartMarkers.add(path);
+          if (isMarkerPath(path, DESKTOP_UPDATE_RESTART_MARKER_FILE))
+            updateRestartMarkers.add(path);
           updateMarkerContents.set(path, data);
         }
       }),
@@ -319,7 +328,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     installSteps,
     updateRestartMarkers,
     updateInProgressMarker: () =>
-      [...updateMarkerContents].find(([path]) => path.endsWith("/desktop-update-in-progress"))?.[1],
+      [...updateMarkerContents].find(([path]) =>
+        isMarkerPath(path, DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE),
+      )?.[1],
     installRecords,
     previousInstallRecord: () => previousInstallRecord,
     downloadCount: () => downloadCount,
