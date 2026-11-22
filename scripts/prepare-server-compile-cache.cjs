@@ -10,6 +10,12 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
     console.log(`[server-compile-cache] Skipping unsupported target ${electronPlatformName}`);
     return;
   }
+  // Upstream cross-builds Windows on Linux, so it never ships this cache there and its payload file
+  // limit leaves no room for it. The personal fork builds Windows natively.
+  if (electronPlatformName === "win32") {
+    console.log("[server-compile-cache] Skipping win32 to match cross-built upstream payload");
+    return;
+  }
   // Generating the cache runs the bundle, and a PR preview's bundle must never run next to signing secrets.
   if (process.env.T3CODE_DESKTOP_UNTRUSTED_BUNDLE === "true") {
     console.log("[server-compile-cache] Skipping untrusted bundle");

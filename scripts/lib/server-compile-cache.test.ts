@@ -11,6 +11,7 @@ it.each([
   { platform: "linux", hostArch: "x64", arch: 3, reason: "unexecutable target linux/arm64" },
   { platform: "linux", hostArch: "arm64", arch: 1, reason: "unexecutable target linux/x64" },
   { platform: "darwin", hostArch: "arm64", arch: 3, reason: "untrusted bundle", untrusted: true },
+  { platform: "win32", hostArch: "x64", arch: 1, reason: "win32 to match cross-built upstream" },
 ])(
   "skips cache generation for $reason",
   async ({ platform, hostArch, arch, reason, untrusted }) => {
