@@ -81,7 +81,7 @@ The command first fast-forwards from the personal fork to pick up scheduled main
 
 A T3 Code scheduled task, "Fork sync: merge upstream nightly, build, publish", runs Sundays and Wednesdays at 09:00 while the personal app is open. Each run is an agent (Opus 5.5, high effort) in its own thread and a fresh worktree from `origin/main`. It merges the newest upstream nightly tag, resolves conflicts while keeping fork behaviour, runs `fork-check.sh` and focused checks, pushes to `origin/main`, then builds and publishes the macOS release with `scripts/release-personal.ts`. A conflict that needs a human decision stops the run before anything is pushed. It never force-pushes, installs, or restarts the app, and it leaves the working checkout untouched, so `git pull` afterwards.
 
-Each run's report is its thread. Pause, edit, or run it now from Settings → Scheduled tasks. The Windows installer still has to be built on the PC and added to the same release.
+After the Mac publish, the run asks the linked Windows PC (DESKTOP-9HPIMCG) to build the NSIS installer for the same release and add it there. If the PC is offline, the report says the installer is missing; run `node scripts/release-personal.ts build --version <v>` and `publish --version <v>` on the PC later. Each run's report is its thread. Pause, edit, or run it now from Settings → Scheduled tasks.
 
 ## Personal desktop app
 
