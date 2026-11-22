@@ -2,7 +2,8 @@
 /**
  * Personal desktop releases without GitHub Actions: each machine builds its own platform
  * and adds the file to one GitHub release, which the personal updater reads. Run
- * `build [--version <v>] [--ref <commit>]`, then `publish --version <v>`.
+ * `build [--version <v>] [--ref <commit>]`, then `publish --version <v>`. `notes --version <v>`
+ * previews the generated release notes.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -11,7 +12,10 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
+import { composePersonalReleaseNotes, parseNightlyMerge } from "./lib/personal-release-notes.ts";
+
 const RELEASE_REPO = "Jarne47/t3code";
+const UPSTREAM_REPO = "pingdotgg/t3code";
 const VERSION_PATTERN = /^\d+\.\d+\.\d+-itamar\.\d{8}\.\d+$/;
 const ASSET_PATTERN = /^(T3-Code-.+\.(exe|zip)|t3-.+\.tar\.gz)$/;
 const repoRoot = NodePath.dirname(import.meta.dirname);
@@ -280,17 +284,7 @@ function publish(version: string): void {
   if (existing === undefined) {
     const commit = NodeFS.readFileSync(NodePath.join(output, "source-commit"), "utf8").trim();
     const notes = NodePath.join(output, "release-notes.md");
-    NodeFS.writeFileSync(
-      notes,
-      `Personal build of T3 Code (Itamar).
-
-Version: ${version}
-
-Windows and Apple Silicon Mac installers are added as each machine builds them. Personal app updates are available in Settings → About once this release has your platform's installer.
-
-These personal builds use a separate ~/.t3-itamar data directory. Windows installers lack a commercial signing certificate; the Mac package is signed ad hoc.
-`,
-    );
+    NodeFS.writeFileSync(notes, releaseNotes(version, commit));
     run("gh", [
       "release",
       "create",
@@ -319,6 +313,124 @@ These personal builds use a separate ~/.t3-itamar data directory. Windows instal
   process.stdout.write(`\nPublished ${fresh.join(", ")} to v${version}.\n`);
 }
 
+function gitLines(args: ReadonlyArray<string>): ReadonlyArray<string> {
+  return (capture("git", args) ?? "").split("\n").filter((line) => line.length > 0);
+}
+
+/**
+ * The newest other complete personal release (both installers) in `commit`'s history. A release
+ * one machine never finished is skipped, so its notes stay accurate for the other platform.
+ */
+function previousRelease(version: string, commit: string) {
+  const tags = (
+    capture("gh", [
+      "release",
+      "list",
+      "--repo",
+      RELEASE_REPO,
+      "--limit",
+      "30",
+      "--json",
+      "tagName",
+      "--jq",
+      ".[].tagName",
+    ]) ?? ""
+  )
+    .split("\n")
+    .map((tag) => tag.replace(/^v/, ""))
+    .filter((tag) => VERSION_PATTERN.test(tag) && tag !== version);
+  for (const tag of tags) {
+    const release = findRelease(tag);
+    const complete = ["exe", "zip"].every((ext) =>
+      release?.assets.some((name) => name.endsWith(`.${ext}`)),
+    );
+    if (
+      release &&
+      complete &&
+      capture("git", ["merge-base", "--is-ancestor", release.commit, commit]) !== undefined
+    ) {
+      return { version: tag, commit: release.commit };
+    }
+  }
+  return undefined;
+}
+
+/** Notes describing the fork commits and upstream nightlies since the previous personal release. */
+function releaseNotes(version: string, commit: string): string {
+  const previous = previousRelease(version, commit);
+  const range = previous ? `${previous.commit}..${commit}` : commit;
+  const forkSubjects = [
+    ...gitLines(["log", "--first-parent", "--no-merges", "--format=%s", range]),
+  ];
+  const mergedCounters: number[] = [];
+  let upstreamChangeCount = 0;
+  for (const line of gitLines(["log", "--first-parent", "--merges", "--format=%H %s", range])) {
+    const [merge = "", ...subject] = line.split(" ");
+    const sideRange = `${merge}^1..${merge}^2`;
+    const nightly = parseNightlyMerge(subject.join(" "));
+    if (nightly) {
+      mergedCounters.push(nightly.counter);
+      upstreamChangeCount += Number(
+        capture("git", ["rev-list", "--count", "--no-merges", sideRange]) ?? 0,
+      );
+    } else {
+      forkSubjects.push(...gitLines(["log", "--no-merges", "--format=%s", sideRange]));
+    }
+  }
+  const previousCounter = previous
+    ? (gitLines(["log", "--first-parent", "--merges", "--format=%s", previous.commit])
+        .map(parseNightlyMerge)
+        .find((merge) => merge !== undefined)?.counter ?? 0)
+    : 0;
+  const newestCounter = Math.max(0, ...mergedCounters);
+  // Upstream writes highlights per nightly; include every nightly this merge skipped over too.
+  const upstreamNightlies = (
+    capture("gh", [
+      "release",
+      "list",
+      "--repo",
+      UPSTREAM_REPO,
+      "--limit",
+      "200",
+      "--json",
+      "tagName",
+      "--jq",
+      ".[].tagName",
+    ]) ?? ""
+  )
+    .split("\n")
+    .flatMap((tag) => {
+      const counter = parseNightlyMerge(`merge upstream nightly ${tag}`)?.counter;
+      return counter !== undefined && counter > previousCounter && counter <= newestCounter
+        ? [{ tag, counter }]
+        : [];
+    })
+    .toSorted((left, right) => right.counter - left.counter)
+    .map(({ tag }) => ({
+      tag,
+      body:
+        capture("gh", [
+          "release",
+          "view",
+          tag,
+          "--repo",
+          UPSTREAM_REPO,
+          "--json",
+          "body",
+          "--jq",
+          ".body",
+        ]) ?? "",
+    }));
+  return composePersonalReleaseNotes({
+    version,
+    repository: RELEASE_REPO,
+    ...(previous ? { previousVersion: previous.version } : {}),
+    forkSubjects,
+    upstreamNightlies,
+    upstreamChangeCount,
+  });
+}
+
 const { positionals, values } = NodeUtil.parseArgs({
   allowPositionals: true,
   options: { version: { type: "string" }, ref: { type: "string" } },
@@ -328,10 +440,17 @@ if (command === "build") {
   build({ ...values });
 } else if (command === "publish" && values.version) {
   publish(values.version);
+} else if (command === "notes" && values.version) {
+  // Prints the notes; `gh release edit v<version> --notes-file <file>` replaces a published release's.
+  const commit =
+    findRelease(values.version)?.commit ?? capture("git", ["rev-parse", values.ref ?? "HEAD"]);
+  if (commit === undefined) throw new Error(`Unknown commit for ${values.version}.`);
+  process.stdout.write(releaseNotes(values.version, commit));
 } else {
   process.stderr.write(
     "Usage: node scripts/release-personal.ts build [--version <v>] [--ref <commit>]\n" +
-      "       node scripts/release-personal.ts publish --version <v>\n",
+      "       node scripts/release-personal.ts publish --version <v>\n" +
+      "       node scripts/release-personal.ts notes --version <v> [--ref <commit>]\n",
   );
   process.exit(1);
 }
