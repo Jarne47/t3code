@@ -68,6 +68,9 @@ describe("environment summary subscriptions", () => {
       expect(h.registry.get(h.full.presentationsAtom).get(FIRST)?.entry.target.label).toBe(
         "Itamar-MacBookPro-M5",
       );
+      expect(h.registry.get(h.full.presentationsAtom).get(FIRST)?.entry.target).toBeInstanceOf(
+        PrimaryConnectionTarget,
+      );
       expect(h.registry.get(h.environmentsAtom)[0]?.environmentLabel).toBe("Itamar-MacBookPro-M5");
       const renamed = h.registry.get(h.full.presentationAtom(FIRST));
       h.registry.set(h.configs(FIRST), { ...named, providers: [] });

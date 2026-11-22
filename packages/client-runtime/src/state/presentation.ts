@@ -10,7 +10,15 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
-import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  BearerConnectionTarget,
+  type ConnectionTarget,
+  PrimaryConnectionTarget,
+  RelayConnectionTarget,
+  SshConnectionTarget,
+  type SupervisorConnectionState,
+} from "../connection/model.ts";
 import {
   connectionCatalogDisplayUrl,
   presentConnectionState,
@@ -21,6 +29,20 @@ import {
 } from "../connection/presentation.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import { hasRelayRoute } from "../connection/routes.ts";
+
+// Targets are Schema class instances; a spread copy would lose the class prototype.
+function withTargetLabel(target: ConnectionTarget, label: string): ConnectionTarget {
+  switch (target._tag) {
+    case "PrimaryConnectionTarget":
+      return new PrimaryConnectionTarget({ ...target, label });
+    case "BearerConnectionTarget":
+      return new BearerConnectionTarget({ ...target, label });
+    case "RelayConnectionTarget":
+      return new RelayConnectionTarget({ ...target, label });
+    case "SshConnectionTarget":
+      return new SshConnectionTarget({ ...target, label });
+  }
+}
 
 function mapsEqual<K, V>(left: ReadonlyMap<K, V>, right: ReadonlyMap<K, V>): boolean {
   if (left.size !== right.size) {
@@ -116,7 +138,9 @@ export function createEnvironmentPresentationAtoms<E>(input: {
         namedEntry = {
           source: entry,
           value:
-            label === entry.target.label ? entry : { ...entry, target: { ...entry.target, label } },
+            label === entry.target.label
+              ? entry
+              : { ...entry, target: withTargetLabel(entry.target, label) },
         };
       }
       const next = {
